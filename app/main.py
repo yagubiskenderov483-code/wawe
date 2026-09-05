@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+import asyncio
+import signal
+from pathlib import Path
+
+from app.config import DATA_DIR, load_settings
+from app.marketplace.scanner import MarketplaceScanner
+from app.notifications.alerts import AlertManager
+from app.notifications.publisher import Publisher
+from app.profile.analyzer import ProfileAnalyzer
+from app.storage.backup import create_backup
+from app.storage.database import Database
+from app.telegram.bot import setup_bot, verify_target_channels
+from app.telegram.user_client import build_user_client, start_user_client
+from app.utils.logger import log, redact_secrets, setup_logging
+from app.utils.rate_limit import ApiLimiter, SessionInvalidError, sleep_seconds
+from app.utils.state import AppState
+
+
+async def backup_loop(state: AppState, db: Database, backup_dir: str, interval: int) -> None:
+    interval = max(60, int(interval or 3600))
+    while not state.shutdown:
+        try:
+            await sleep_seconds(interval)
+            if state.shutdown:
+                return
+            create_backup(db, backup_dir)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            log("ERROR", f"SQLite backup failed: {type(error).__name__}: {redact_secrets(str(error))}")
+
+
+async def run_tracker() -> None:
+    settings = load_settings()
+    setup_logging(settings.debug)
+    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+    Path(settings.backup_dir).mkdir(parents=True, exist_ok=True)
+
+    db = Database(settings.db_path)
+    state = AppState(settings.max_queue_size)
+    limiter = ApiLimiter(concurrency=1, min_interval=0.3)
+    client = build_user_client(settings)
+    bot = None
+    dp = None
+    alerts = AlertManager(settings, None, state)
+    tasks: list[asyncio.Task] = []
+
+    stop_event = asyncio.Event()
+
+    def _request_stop() -> None:
+        log("MAIN", "Shutdown requested")
+        state.request_shutdown()
+        stop_event.set()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _request_stop)
+        except NotImplementedError:
+            signal.signal(sig, lambda *_: _request_stop())
+
+    try:
+        await start_user_client(client)
+        analyzer = ProfileAnalyzer(client, db, settings, limiter, state.stats)
+        bot, dp = setup_bot(settings, state, db, analyzer)
+        alerts.bind_bot(bot)
+        try:
+            await verify_target_channels(bot, settings)
+        except Exception as error:
+            log("ERROR", str(error))
+            if bot is not None:
+                await alerts.notify("ChannelCheck", error)
+            raise
+
+        scanner = MarketplaceScanner(settings, state, db, client, analyzer, limiter, alerts)
+        publisher = Publisher(settings, state, db, bot, client, analyzer, alerts)
+
+        tasks = [
+            asyncio.create_task(scanner.run(), name="scanner"),
+            asyncio.create_task(publisher.run(), name="publisher"),
+            asyncio.create_task(dp.start_polling(bot), name="bot"),
+            asyncio.create_task(backup_loop(state, db, settings.backup_dir, settings.db_backup_interval), name="backup"),
+        ]
+        log("MAIN", "Tracker is running. Press Ctrl+C to stop.")
+        await stop_event.wait()
+    except SessionInvalidError as error:
+        log("ERROR", str(error))
+        if bot is not None:
+            await alerts.notify("UserSession", error)
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        log("ERROR", f"Fatal error: {type(error).__name__}: {redact_secrets(str(error))}")
+        if bot is not None:
+            await alerts.notify("Main", error)
+        raise
+    finally:
+        state.request_shutdown()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if dp is not None:
+            try:
+                await dp.stop_polling()
+            except Exception:
+                pass
+        if bot is not None:
+            try:
+                await bot.session.close()
+            except Exception:
+                pass
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+        db.close()
+        log("MAIN", "Shutdown complete")
+
+
+def main() -> None:
+    asyncio.run(run_tracker())
+
+
+if __name__ == "__main__":
+    main()

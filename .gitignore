@@ -147,6 +147,18 @@ activemq-data/
 # SageMath parsed files
 *.sage.py
 
+# Telegram sessions and local tracker data
+sessions/*.session
+sessions/*.session-journal
+!sessions/.gitkeep
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
+data/backups/
+!data/.gitkeep
+!data/backups/.gitkeep
+
 # Environments
 .env
 .envrc

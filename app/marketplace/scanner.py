@@ -30,6 +30,7 @@ from app.marketplace.filters import (
     should_publish,
 )
 from app.marketplace.models import (
+    STATUS_ERROR,
     STATUS_NEW,
     STATUS_QUEUED,
     STATUS_SKIPPED,
@@ -107,6 +108,7 @@ class MarketplaceScanner:
             log("SCAN", "Scanner stopped")
 
     async def scan_once(self) -> None:
+        self.state.stats.last_scan = utc_now_iso()
         gift_ids = await self._load_gift_ids()
         debug("SCAN", f"Gift types for resale: {len(gift_ids)}")
         total = 0
@@ -305,7 +307,11 @@ class MarketplaceScanner:
             return "price_change"
         if status in {STATUS_QUEUED}:
             return None
-        if existing.get("sent_at") or existing.get("last_notified_price") == listing.price:
+        if status == STATUS_ERROR:
+            return "retry"
+        if existing.get("sent_at"):
+            return None
+        if existing.get("last_notified_price") is not None and existing.get("last_notified_price") == listing.price:
             return None
         if status == STATUS_SKIPPED:
             reason = existing.get("skip_reason") or ""

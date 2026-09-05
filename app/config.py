@@ -142,6 +142,27 @@ class Settings:
         return self.manual_nationality_filter.strip().lower()
 
 
+def resolve_publish_chat_ids(
+    configured: tuple[int, ...],
+    operator_chats: tuple[int, ...],
+    bot_id: int | None = None,
+) -> tuple[int, ...]:
+    """Skip the bot's own id; deliver to real channels and operator private chats."""
+    ids: list[int] = []
+    seen: set[int] = set()
+    for value in (*configured, *operator_chats):
+        if value is None:
+            continue
+        chat_id = int(value)
+        if bot_id is not None and chat_id == int(bot_id):
+            continue
+        if chat_id in seen:
+            continue
+        seen.add(chat_id)
+        ids.append(chat_id)
+    return tuple(ids)
+
+
 def load_settings() -> Settings:
     api_id_raw = _env("API_ID")
     if not api_id_raw or api_id_raw == "PUT_API_ID_HERE":

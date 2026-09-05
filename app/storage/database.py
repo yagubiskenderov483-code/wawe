@@ -81,6 +81,11 @@ CREATE TABLE IF NOT EXISTS scanner_state (
     updated_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS notify_chats (
+    chat_id INTEGER PRIMARY KEY,
+    added_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_listings_listing_key ON listings(listing_key);
 CREATE INDEX IF NOT EXISTS idx_listings_slug ON listings(slug);
 CREATE INDEX IF NOT EXISTS idx_listings_owner_id ON listings(owner_id);
@@ -430,6 +435,21 @@ class Database:
 
     def reset_scanner_offset(self, gift_id: int) -> None:
         self.set_scanner_offset(gift_id, "")
+
+    def add_notify_chat(self, chat_id: int) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO notify_chats (chat_id, added_at)
+            VALUES (?, ?)
+            ON CONFLICT(chat_id) DO NOTHING
+            """,
+            (int(chat_id), utc_now_iso()),
+        )
+        self.conn.commit()
+
+    def get_notify_chats(self) -> tuple[int, ...]:
+        rows = self.conn.execute("SELECT chat_id FROM notify_chats ORDER BY added_at ASC").fetchall()
+        return tuple(int(row["chat_id"]) for row in rows)
 
 
 def get_manual_profile_preferences(db: Database, user_id: int) -> dict[str, Optional[str]]:

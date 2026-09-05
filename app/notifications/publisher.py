@@ -5,9 +5,9 @@ from aiogram import Bot
 from telethon import TelegramClient
 from telethon.tl.functions.payments import GetUniqueStarGiftRequest
 
-from app.config import Settings
+from app.config import Settings, resolve_publish_chat_ids
 from app.marketplace.filters import calculate_score, classify_filter_stat, should_publish
-from app.marketplace.models import STATUS_ERROR, STATUS_SKIPPED, Listing, Profile, QueueItem, utc_now_iso
+from app.marketplace.models import STATUS_ERROR, STATUS_NEW, STATUS_SKIPPED, Listing, Profile, QueueItem, utc_now_iso
 from app.marketplace.parser import listing_still_on_sale, parse_listing
 from app.notifications.alerts import AlertManager
 from app.profile.analyzer import ProfileAnalyzer
@@ -138,8 +138,9 @@ class Publisher:
                     if item is None:
                         continue
                     started = time.monotonic()
-                    await self._publish_item(item)
-                    self.state.stats.record_publish(time.monotonic() - started, utc_now_iso())
+                    published = await self._publish_item(item)
+                    if published:
+                        self.state.stats.record_publish(time.monotonic() - started, utc_now_iso())
                     backoff = 2
                 except Exception as error:
                     self.state.stats.inc("errors")
@@ -161,7 +162,21 @@ class Publisher:
         finally:
             pass
 
-    async def _publish_item(self, item: QueueItem) -> None:
+    def _bot_id(self) -> int | None:
+        token = self.settings.bot_token or ""
+        prefix = token.split(":", 1)[0]
+        if prefix.isdigit():
+            return int(prefix)
+        return None
+
+    def _targets(self) -> tuple[int, ...]:
+        return resolve_publish_chat_ids(
+            self.settings.channel_ids,
+            self.db.get_notify_chats(),
+            self._bot_id(),
+        )
+
+    async def _publish_item(self, item: QueueItem) -> bool:
         listing = item.listing
         try:
             allowed, reason = await self._recheck(listing)
@@ -171,31 +186,41 @@ class Publisher:
                 stat = classify_filter_stat(reason)
                 if stat:
                     self.state.stats.inc(stat)
-                return
+                return False
+
+            targets = self._targets()
+            if not targets:
+                log("SEND", "No publish chat yet. Send /start to the bot in private chat")
+                queued = await self.state.queue.put(item)
+                if not queued:
+                    self.db.mark_status(listing.listing_key, STATUS_NEW, "queue_full")
+                await sleep_seconds(2)
+                return False
 
             text = format_listing_message(listing, item.profile)
             success = 0
-            for channel_id in self.settings.channel_ids:
+            for chat_id in targets:
                 log("SEND", "Отправка в канал")
                 try:
-                    await self.bot.send_message(chat_id=channel_id, text=text, disable_web_page_preview=False)
+                    await self.bot.send_message(chat_id=chat_id, text=text, disable_web_page_preview=False)
                     success += 1
                     log("SEND", "Успешно")
                     await sleep_seconds(self.settings.publish_delay)
                 except Exception as error:
                     self.state.stats.inc("send_errors")
-                    log("SEND", f"Channel failed: {channel_id} {type(error).__name__}: {redact_secrets(str(error))}")
+                    log("SEND", f"Channel failed: {chat_id} {type(error).__name__}: {redact_secrets(str(error))}")
                     await self.alerts.notify("Publisher", error)
 
             if success <= 0:
                 self.db.mark_status(listing.listing_key, STATUS_ERROR, "send_failed")
                 self.state.stats.inc("errors")
-                return
+                return False
 
             self.db.mark_sent(listing.listing_key, listing.price, listing.score)
             if listing.is_price_change:
                 self.db.mark_price_change_notified(listing.listing_key, listing.old_price, listing.price)
             self.state.stats.inc("sent")
+            return True
         finally:
             self.state.queue.task_done()
 

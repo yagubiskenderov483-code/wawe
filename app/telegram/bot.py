@@ -150,6 +150,7 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 
 @router.message(Command("login"))
 async def cmd_login(message: Message, state: FSMContext, command: CommandObject) -> None:
+    await _register_operator_chat(message)
     if not await _ensure_login_allowed(message):
         return
     if await ctx.client.is_user_authorized():
@@ -254,10 +255,29 @@ async def login_password_received(message: Message, state: FSMContext) -> None:
     await message.answer("Вход выполнен. Scanner запущен.")
 
 
+async def _register_operator_chat(message: Message) -> None:
+    if not _is_private(message) or not _is_operator(message):
+        return
+    chat_id = getattr(message.chat, "id", None)
+    if chat_id is None:
+        return
+    bot_id = None
+    token = ctx.settings.bot_token or ""
+    prefix = token.split(":", 1)[0]
+    if prefix.isdigit():
+        bot_id = int(prefix)
+    if bot_id is not None and int(chat_id) == bot_id:
+        return
+    ctx.db.add_notify_chat(int(chat_id))
+    log("BOT", "Operator chat registered for listing delivery")
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
+    await _register_operator_chat(message)
     username = ctx.settings.bot_username.lstrip("@")
     authorized = ctx.state.user_authorized
+    targets = ctx.db.get_notify_chats()
     login_hint = (
         "User-сессия уже активна."
         if authorized
@@ -272,7 +292,8 @@ async def cmd_start(message: Message) -> None:
     await message.answer(
         "Marketplace Tracker запущен.\n"
         f"Бот: @{username}\n"
-        f"Публикация: chat_id {ctx.settings.channel_ids[0] if ctx.settings.channel_ids else '-'}\n"
+        f"Лоты будут приходить сюда, в этот чат.\n"
+        f"Получатели: {', '.join(str(item) for item in targets) or 'этот чат'}\n"
         "Пауза между лотами: 4 секунды.\n\n"
         f"{login_hint}"
     )
@@ -292,11 +313,14 @@ async def cmd_resume(message: Message) -> None:
 
 @router.message(Command("status"))
 async def cmd_status(message: Message) -> None:
+    await _register_operator_chat(message)
     stats = ctx.state.stats
+    targets = ctx.db.get_notify_chats()
     text = (
         f"Scanner: {ctx.state.scanner_status()}\n"
         f"Publisher: {ctx.state.publisher_status()}\n"
         f"User session: {'AUTHORIZED' if ctx.state.user_authorized else 'WAITING_LOGIN'}\n"
+        f"Deliver to: {', '.join(str(item) for item in targets) or '-'}\n"
         f"Queue: {ctx.state.queue.qsize()}\n"
         f"Last scan: {stats.last_scan or '-'}\n"
         f"Last publish: {stats.last_publish or '-'}\n"

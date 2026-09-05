@@ -89,6 +89,37 @@ class DatabaseTests(unittest.TestCase):
         self.db.delete_manual_profile_preference(7)
         self.assertIsNone(self.db.get_manual_profile_preferences(7)["manual_gender"])
 
+    def test_notify_chats(self):
+        self.db.add_notify_chat(555001)
+        self.db.add_notify_chat(555001)
+        self.assertEqual(self.db.get_notify_chats(), (555001,))
+
+    def test_error_listing_can_retry(self):
+        from unittest.mock import MagicMock
+
+        from app.marketplace.models import STATUS_ERROR
+        from app.marketplace.scanner import MarketplaceScanner
+        from tests.helpers import passing_listing, settings
+
+        scanner = MarketplaceScanner(
+            settings(),
+            MagicMock(),
+            self.db,
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+        )
+        listing = passing_listing(listing_key="gift:err", price=12000)
+        existing = {
+            "price": 12000,
+            "status": STATUS_ERROR,
+            "sent_at": None,
+            "last_notified_price": None,
+            "skip_reason": "send_failed",
+        }
+        self.assertEqual(scanner._classify_signal(listing, existing), "retry")
+
 
 if __name__ == "__main__":
     unittest.main()

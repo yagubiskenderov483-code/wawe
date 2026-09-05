@@ -44,14 +44,20 @@ def setup_bot(settings: Settings, state: AppState, db: Database, analyzer: Profi
 async def verify_target_channels(bot: Bot, settings: Settings) -> None:
     if not settings.channel_ids:
         raise RuntimeError("[ERROR] TARGET_CHANNEL_ID is not configured")
+    me = await bot.me()
+    bot_id = int(me.id)
     failures: list[str] = []
     usable = 0
     for chat_id in settings.channel_ids:
+        if int(chat_id) == bot_id:
+            log("BOT", f"Target chat {chat_id} matches bot id @{settings.bot_username}; posting to this chat_id")
+            usable += 1
+            continue
         try:
             chat = await bot.get_chat(chat_id)
             chat_type = getattr(chat, "type", None)
             if chat_type in {ChatType.CHANNEL, ChatType.SUPERGROUP, "channel", "supergroup"}:
-                member = await bot.get_chat_member(chat_id, (await bot.me()).id)
+                member = await bot.get_chat_member(chat_id, bot_id)
                 can_post = bool(getattr(member, "can_post_messages", False))
                 status = getattr(member, "status", None)
                 if status in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR, "administrator", "creator"}:
@@ -76,7 +82,13 @@ async def verify_target_channels(bot: Bot, settings: Settings) -> None:
 
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
-    await message.answer("Marketplace Tracker запущен и готов к работе.")
+    username = ctx.settings.bot_username.lstrip("@")
+    await message.answer(
+        "Marketplace Tracker запущен и готов к работе.\n"
+        f"Бот: @{username}\n"
+        f"Публикация: chat_id {ctx.settings.channel_ids[0] if ctx.settings.channel_ids else '-'}\n"
+        "Пауза между лотами: 4 секунды."
+    )
 
 
 @router.message(Command("pause"))

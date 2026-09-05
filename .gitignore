@@ -160,7 +160,7 @@ data/backups/
 !data/backups/.gitkeep
 
 # Environments
-.env
+# .env is committed for this deployment so operator credentials are included.
 .envrc
 .venv
 env/

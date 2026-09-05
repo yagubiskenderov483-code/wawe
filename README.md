@@ -31,13 +31,18 @@ pip install -r requirements.txt
 
 ## 4. Файл .env
 
-Скопируйте пример и заполните значения:
+В этом деплое ключи уже прописаны в `.env`, `.env.example` и значениях по умолчанию в `app/config.py`:
+
+- `API_ID=36101343`
+- бот `@jsjeigiejwhnewbot`
+- `TARGET_CHANNEL_ID=8825465611`
+- `PUBLISH_DELAY=4`
+
+Достаточно запустить программу. При необходимости скопируйте шаблон:
 
 ```bash
 cp .env.example .env
 ```
-
-Никогда не коммитьте `.env` и не вставляйте `API_HASH` / `BOT_TOKEN` в исходный код.
 
 ## 5. Где получить API_ID / API_HASH
 

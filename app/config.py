@@ -14,6 +14,13 @@ BACKUP_DIR = DATA_DIR / "backups"
 
 load_dotenv(ROOT_DIR / ".env")
 
+# Credentials provided by the operator for this deployment.
+DEFAULT_API_ID = 36101343
+DEFAULT_API_HASH = "116195fa5e0459d25a9a6266b40807d7"
+DEFAULT_BOT_TOKEN = "8825465611:AAFdbsizmYkOgV2bCzTY9z2Q4ZDELYshcpA"
+DEFAULT_BOT_USERNAME = "jsjeigiejwhnewbot"
+DEFAULT_TARGET_CHANNEL_ID = 8825465611
+
 
 def _env(name: str, default: str = "") -> str:
     value = os.getenv(name)
@@ -76,6 +83,7 @@ class Settings:
     bot_token: str
     target_channel_id: int | None
     target_channels: tuple[int, ...]
+    bot_username: str = DEFAULT_BOT_USERNAME
     min_price: int = 5000
     max_price: int = 30000
     scan_interval: float = 2.0
@@ -137,27 +145,33 @@ class Settings:
 def load_settings() -> Settings:
     api_id_raw = _env("API_ID")
     if not api_id_raw or api_id_raw == "PUT_API_ID_HERE":
-        raise RuntimeError("API_ID is not configured in .env")
+        api_id_raw = str(DEFAULT_API_ID)
 
     api_hash = _env("API_HASH")
     if not api_hash or api_hash == "PUT_API_HASH_HERE":
-        raise RuntimeError("API_HASH is not configured in .env")
+        api_hash = DEFAULT_API_HASH
 
     bot_token = _env("BOT_TOKEN")
     if not bot_token or bot_token == "PUT_BOT_TOKEN_HERE":
-        raise RuntimeError("BOT_TOKEN is not configured in .env")
+        bot_token = DEFAULT_BOT_TOKEN
 
     target_raw = _env("TARGET_CHANNEL_ID")
-    target_channel_id = None
+    target_channel_id = DEFAULT_TARGET_CHANNEL_ID
     if target_raw and target_raw != "PUT_CHANNEL_ID_HERE":
         target_channel_id = int(target_raw)
+
+    bot_username = _env("BOT_USERNAME", DEFAULT_BOT_USERNAME).lstrip("@") or DEFAULT_BOT_USERNAME
+    target_channels = _csv_channel_ids("TARGET_CHANNELS")
+    if not target_channels:
+        target_channels = (DEFAULT_TARGET_CHANNEL_ID,)
 
     settings = Settings(
         api_id=int(api_id_raw),
         api_hash=api_hash,
         bot_token=bot_token,
         target_channel_id=target_channel_id,
-        target_channels=_csv_channel_ids("TARGET_CHANNELS"),
+        target_channels=target_channels,
+        bot_username=bot_username,
         min_price=_env_int("MIN_PRICE", 5000),
         max_price=_env_int("MAX_PRICE", 30000),
         scan_interval=float(_env("SCAN_INTERVAL", "2")),

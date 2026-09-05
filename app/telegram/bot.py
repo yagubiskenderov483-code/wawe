@@ -1,17 +1,28 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 
-from aiogram import Bot, Dispatcher, Router
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ChatMemberStatus, ChatType
-from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
 from aiogram.exceptions import TelegramForbiddenError, TelegramUnauthorizedError
+from aiogram.filters import Command, CommandObject, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import Message
+from telethon import TelegramClient
 
 from app.config import Settings
 from app.marketplace.models import utc_now_iso
 from app.profile.analyzer import ProfileAnalyzer
 from app.storage.database import Database
+from app.telegram.auth_flow import (
+    BotTelethonAuth,
+    describe_auth_error,
+    normalize_login_code,
+    normalize_phone,
+)
 from app.utils.logger import log
 from app.utils.state import AppState
 
@@ -20,23 +31,46 @@ router = Router()
 _TAG_RE = re.compile(r"(gender|nationality|tag)=([^\s]+)", re.IGNORECASE)
 
 
+class LoginStates(StatesGroup):
+    waiting_phone = State()
+    waiting_code = State()
+    waiting_password = State()
+
+
 class BotContext:
     settings: Settings
     state: AppState
     db: Database
     analyzer: ProfileAnalyzer | None
+    client: TelegramClient | None
+    auth: BotTelethonAuth | None
+    on_authorized: Callable[[], Awaitable[None]] | None
 
 
 ctx = BotContext()
+ctx.client = None
+ctx.auth = None
+ctx.on_authorized = None
+ctx.analyzer = None
 
 
-def setup_bot(settings: Settings, state: AppState, db: Database, analyzer: ProfileAnalyzer | None = None) -> tuple[Bot, Dispatcher]:
+def setup_bot(
+    settings: Settings,
+    state: AppState,
+    db: Database,
+    analyzer: ProfileAnalyzer | None = None,
+    client: TelegramClient | None = None,
+    on_authorized: Callable[[], Awaitable[None]] | None = None,
+) -> tuple[Bot, Dispatcher]:
     ctx.settings = settings
     ctx.state = state
     ctx.db = db
     ctx.analyzer = analyzer
+    ctx.client = client
+    ctx.auth = BotTelethonAuth(client) if client is not None else None
+    ctx.on_authorized = on_authorized
     bot = Bot(token=settings.bot_token)
-    dp = Dispatcher()
+    dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     return bot, dp
 
@@ -80,14 +114,167 @@ async def verify_target_channels(bot: Bot, settings: Settings) -> None:
         log("ERROR", f"Bot cannot post messages to target channel: {item}")
 
 
+def _is_private(message: Message) -> bool:
+    chat_type = getattr(message.chat, "type", None)
+    return chat_type in {ChatType.PRIVATE, "private"}
+
+
+def _is_operator(message: Message) -> bool:
+    admin = ctx.settings.admin_user_id
+    if admin is None:
+        return True
+    user = message.from_user
+    return user is not None and int(user.id) == int(admin)
+
+
+async def _ensure_login_allowed(message: Message) -> bool:
+    if not _is_private(message):
+        await message.answer("Вход доступен только в личке с ботом.")
+        return False
+    if not _is_operator(message):
+        await message.answer("Недостаточно прав для /login.")
+        return False
+    if ctx.client is None or ctx.auth is None:
+        await message.answer("User client ещё не подключен. Перезапустите tracker.")
+        return False
+    return True
+
+
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    if ctx.auth is not None:
+        ctx.auth.clear()
+    await message.answer("Вход отменён. Чтобы начать снова, отправьте /login")
+
+
+@router.message(Command("login"))
+async def cmd_login(message: Message, state: FSMContext, command: CommandObject) -> None:
+    if not await _ensure_login_allowed(message):
+        return
+    if await ctx.client.is_user_authorized():
+        ctx.state.user_authorized = True
+        await message.answer("User-сессия уже авторизована. Сканер может работать.")
+        if ctx.on_authorized is not None:
+            await ctx.on_authorized()
+        return
+    phone = normalize_phone(command.args or "")
+    if phone:
+        await _send_login_code(message, state, phone)
+        return
+    await state.set_state(LoginStates.waiting_phone)
+    await message.answer(
+        "Вход в Telethon через бота.\n\n"
+        "Отправьте номер телефона одним сообщением, например:\n"
+        "+79001234567"
+    )
+
+
+async def _send_login_code(message: Message, state: FSMContext, phone: str) -> None:
+    try:
+        await ctx.auth.request_code(phone)
+    except Exception as error:
+        await state.clear()
+        ctx.auth.clear()
+        await message.answer(describe_auth_error(error))
+        return
+    await state.set_state(LoginStates.waiting_code)
+    await message.answer(
+        "Код отправлен в Telegram на этот номер.\n"
+        "Пришлите код одним сообщением.\n\n"
+        "Код в чат с ботом вводите только вы. Если передумали: /cancel"
+    )
+
+
+@router.message(StateFilter(LoginStates.waiting_phone), F.text)
+async def login_phone_received(message: Message, state: FSMContext) -> None:
+    if not await _ensure_login_allowed(message):
+        return
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        return
+    phone = normalize_phone(text)
+    if phone is None:
+        await message.answer("Не понял номер. Пример: +79001234567")
+        return
+    await _send_login_code(message, state, phone)
+
+
+@router.message(StateFilter(LoginStates.waiting_code), F.text)
+async def login_code_received(message: Message, state: FSMContext) -> None:
+    if not await _ensure_login_allowed(message):
+        return
+    text = (message.text or "").strip()
+    if text.startswith("/login"):
+        return
+    if text.startswith("/cancel"):
+        return
+    raw = text[6:].strip() if text.lower().startswith("/code ") else text
+    code = normalize_login_code(raw)
+    if code is None:
+        await message.answer("Пришлите код цифрами, например 12345")
+        return
+    try:
+        result = await ctx.auth.sign_in_code(code)
+    except Exception as error:
+        await message.answer(describe_auth_error(error))
+        if isinstance(error, Exception) and "Expired" in type(error).__name__:
+            await state.clear()
+        return
+    if result == "2fa":
+        await state.set_state(LoginStates.waiting_password)
+        await message.answer("Включён облачный пароль 2FA. Отправьте пароль одним сообщением.")
+        return
+    await state.clear()
+    ctx.state.user_authorized = True
+    if ctx.on_authorized is not None:
+        await ctx.on_authorized()
+    await message.answer("Вход выполнен. Scanner запущен.")
+
+
+@router.message(StateFilter(LoginStates.waiting_password), F.text)
+async def login_password_received(message: Message, state: FSMContext) -> None:
+    if not await _ensure_login_allowed(message):
+        return
+    password = (message.text or "").strip()
+    if password.startswith("/"):
+        return
+    if not password:
+        await message.answer("Пароль пустой. Отправьте ещё раз или /cancel")
+        return
+    try:
+        await ctx.auth.sign_in_password(password)
+    except Exception as error:
+        await message.answer(describe_auth_error(error))
+        return
+    await state.clear()
+    ctx.state.user_authorized = True
+    if ctx.on_authorized is not None:
+        await ctx.on_authorized()
+    await message.answer("Вход выполнен. Scanner запущен.")
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
     username = ctx.settings.bot_username.lstrip("@")
+    authorized = ctx.state.user_authorized
+    login_hint = (
+        "User-сессия уже активна."
+        if authorized
+        else (
+            "Сначала вход в Telethon через бота:\n"
+            "1. /login\n"
+            "2. номер телефона\n"
+            "3. код из Telegram\n"
+            "4. пароль 2FA, если спросит"
+        )
+    )
     await message.answer(
-        "Marketplace Tracker запущен и готов к работе.\n"
+        "Marketplace Tracker запущен.\n"
         f"Бот: @{username}\n"
         f"Публикация: chat_id {ctx.settings.channel_ids[0] if ctx.settings.channel_ids else '-'}\n"
-        "Пауза между лотами: 4 секунды."
+        "Пауза между лотами: 4 секунды.\n\n"
+        f"{login_hint}"
     )
 
 
@@ -109,6 +296,7 @@ async def cmd_status(message: Message) -> None:
     text = (
         f"Scanner: {ctx.state.scanner_status()}\n"
         f"Publisher: {ctx.state.publisher_status()}\n"
+        f"User session: {'AUTHORIZED' if ctx.state.user_authorized else 'WAITING_LOGIN'}\n"
         f"Queue: {ctx.state.queue.qsize()}\n"
         f"Last scan: {stats.last_scan or '-'}\n"
         f"Last publish: {stats.last_publish or '-'}\n"

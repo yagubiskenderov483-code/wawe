@@ -53,6 +53,8 @@ class AppState:
         self.session_invalid = False
         self.pause_event = asyncio.Event()
         self.pause_event.set()
+        self.user_authorized = False
+        self.workers_started = False
 
     def pause(self) -> None:
         self.scanner_paused = True

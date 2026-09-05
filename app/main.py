@@ -12,7 +12,7 @@ from app.profile.analyzer import ProfileAnalyzer
 from app.storage.backup import create_backup
 from app.storage.database import Database
 from app.telegram.bot import setup_bot, verify_target_channels
-from app.telegram.user_client import build_user_client, start_user_client
+from app.telegram.user_client import build_user_client, connect_user_client
 from app.utils.logger import log, redact_secrets, setup_logging
 from app.utils.rate_limit import ApiLimiter, SessionInvalidError, sleep_seconds
 from app.utils.state import AppState
@@ -46,6 +46,7 @@ async def run_tracker() -> None:
     dp = None
     alerts = AlertManager(settings, None, state)
     tasks: list[asyncio.Task] = []
+    worker_lock = asyncio.Lock()
 
     stop_event = asyncio.Event()
 
@@ -61,28 +62,47 @@ async def run_tracker() -> None:
         except NotImplementedError:
             signal.signal(sig, lambda *_: _request_stop())
 
+    async def start_workers() -> None:
+        async with worker_lock:
+            if state.shutdown or state.workers_started:
+                return
+            if not await client.is_user_authorized():
+                return
+            analyzer = ProfileAnalyzer(client, db, settings, limiter, state.stats)
+            ctx_bind_analyzer(analyzer)
+            scanner = MarketplaceScanner(settings, state, db, client, analyzer, limiter, alerts)
+            publisher = Publisher(settings, state, db, bot, client, analyzer, alerts)
+            tasks.append(asyncio.create_task(scanner.run(), name="scanner"))
+            tasks.append(asyncio.create_task(publisher.run(), name="publisher"))
+            state.user_authorized = True
+            state.workers_started = True
+            log("MAIN", "Scanner and publisher started")
+
     try:
-        await start_user_client(client)
+        authorized = await connect_user_client(client)
+        state.user_authorized = authorized
         analyzer = ProfileAnalyzer(client, db, settings, limiter, state.stats)
-        bot, dp = setup_bot(settings, state, db, analyzer)
+        bot, dp = setup_bot(settings, state, db, analyzer, client=client, on_authorized=start_workers)
         alerts.bind_bot(bot)
         try:
             await verify_target_channels(bot, settings)
         except Exception as error:
             log("ERROR", str(error))
-            if bot is not None:
-                await alerts.notify("ChannelCheck", error)
+            await alerts.notify("ChannelCheck", error)
             raise
 
-        scanner = MarketplaceScanner(settings, state, db, client, analyzer, limiter, alerts)
-        publisher = Publisher(settings, state, db, bot, client, analyzer, alerts)
+        if authorized:
+            await start_workers()
+        else:
+            log("AUTH", "Bot is up. Open @%s and send /login" % settings.bot_username)
 
-        tasks = [
-            asyncio.create_task(scanner.run(), name="scanner"),
-            asyncio.create_task(publisher.run(), name="publisher"),
-            asyncio.create_task(dp.start_polling(bot), name="bot"),
-            asyncio.create_task(backup_loop(state, db, settings.backup_dir, settings.db_backup_interval), name="backup"),
-        ]
+        tasks.append(asyncio.create_task(dp.start_polling(bot), name="bot"))
+        tasks.append(
+            asyncio.create_task(
+                backup_loop(state, db, settings.backup_dir, settings.db_backup_interval),
+                name="backup",
+            )
+        )
         log("MAIN", "Tracker is running. Press Ctrl+C to stop.")
         await stop_event.wait()
     except SessionInvalidError as error:
@@ -118,6 +138,12 @@ async def run_tracker() -> None:
             pass
         db.close()
         log("MAIN", "Shutdown complete")
+
+
+def ctx_bind_analyzer(analyzer: ProfileAnalyzer) -> None:
+    from app.telegram.bot import ctx
+
+    ctx.analyzer = analyzer
 
 
 def main() -> None:

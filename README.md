@@ -82,17 +82,16 @@ cp .env.example .env
 
 ## 10. Первый запуск Telethon
 
-```bash
-python -m app.main
-```
+Программа больше не спрашивает номер в терминале (в Docker это падает с `EOFError`).
 
-При первом старте Telethon интерактивно спросит:
+1. Запустите tracker
+2. Напишите боту `/start`
+3. Отправьте `/login`
+4. Пришлите номер телефона, например `+79001234567`
+5. Пришлите код из Telegram
+6. Если включён 2FA — пришлите облачный пароль
 
-- номер телефона
-- код из Telegram
-- пароль 2FA, если он включён
-
-Сессия сохраняется в `sessions/market_tracker.session`. Код и пароль в файлы проекта не пишутся.
+Сессия сохраняется в `sessions/market_tracker.session`. Номер, код и пароль в файлы проекта не пишутся и в лог не попадают. Отмена: `/cancel`.
 
 ## 11. Как работает Marketplace scanner
 
@@ -205,6 +204,7 @@ python -m app.main
 
 - Scanner: `RUNNING` / `PAUSED` / `STOPPED`
 - Publisher: `RUNNING` / `WAITING` / `STOPPED`
+- User session: `AUTHORIZED` / `WAITING_LOGIN`
 - Queue, last scan/publish, scanned, new, filtered, sent, errors
 
 `/pause` останавливает получение новых лотов. Publisher досылает очередь. `/resume` продолжает сканирование.

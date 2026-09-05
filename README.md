@@ -1,19 +1,13 @@
 # Telegram Marketplace Tracker
 
-Python-трекер новых лотов коллекционных Telegram Gifts на Marketplace. Подходящие объявления публикуются в указанный Telegram-канал (или несколько каналов) с паузой 4 секунды между успешными отправками.
+Python-трекер новых лотов коллекционных Telegram Gifts. Подходящие объявления публикуются **только** в `TARGET_CHANNEL_ID` / `TARGET_CHANNELS`. Личка бота и `ADMIN_USER_ID` используются исключительно для команд и ошибок.
 
-## 1. Требования
-
-- Python 3.11+
-- Аккаунт Telegram для Telethon user client
-- Бот от [@BotFather](https://t.me/BotFather)
-- Канал, куда бот может писать (бот — администратор с правом публикации)
-
-## 2. Создание venv
+## 1. Установка
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
 Windows:
@@ -21,222 +15,274 @@ Windows:
 ```bat
 python -m venv .venv
 .venv\Scripts\activate
-```
-
-## 3. Установка зависимостей
-
-```bash
 pip install -r requirements.txt
 ```
 
-## 4. Файл .env
+Требования: Python 3.11+, user-аккаунт Telegram для Telethon, бот от [@BotFather](https://t.me/BotFather), канал, куда бот может писать.
 
-В этом деплое ключи уже прописаны в `.env`, `.env.example` и значениях по умолчанию в `app/config.py`:
+## 2. requirements
 
-- `API_ID=36101343`
-- бот `@jsjeigiejwhnewbot`
-- `TARGET_CHANNEL_ID=8825465611`
-- `PUBLISH_DELAY=4`
+`requirements.txt`: `telethon`, `aiogram`, `python-dotenv`, `aiohttp`.
 
-Достаточно запустить программу. При необходимости скопируйте шаблон:
+## 3. Файл .env
+
+Скопируйте шаблон и заполните канал:
 
 ```bash
 cp .env.example .env
 ```
 
-## 5. Где получить API_ID / API_HASH
+В этом деплое уже прописаны `API_ID`, `API_HASH`, `BOT_TOKEN` и `@jsjeigiejwhnewbot`.
 
-1. Откройте https://my.telegram.org
-2. Войдите по номеру телефона
-3. Перейдите в **API development tools**
-4. Создайте приложение и скопируйте `api_id` и `api_hash`
-
-## 6. Где получить BOT_TOKEN
-
-1. Откройте [@BotFather](https://t.me/BotFather)
-2. Команда `/newbot`
-3. Скопируйте токен вида `123456789:AAH...`
-
-## 7. Как указать TARGET_CHANNEL_ID
-
-Числовой id чата, куда бот будет отправлять лоты.
-
-- Канал/супергруппа обычно выглядит как `-100xxxxxxxxxx`
-- Узнать id можно через [@userinfobot](https://t.me/userinfobot), экспорт чата или логи бота после добавления в канал
-- Несколько каналов: `TARGET_CHANNELS=-100111,-100222`
-- Если заданы и `TARGET_CHANNEL_ID`, и `TARGET_CHANNELS`, списки объединяются
-
-`8825465611` — это id самого бота, бот не может писать сам себе. После `/start` в личке tracker запоминает ваш чат и шлёт лоты туда.
-
-## 8. Как добавить бота в канал
-
-1. Откройте канал → Administrators → Add Admin
-2. Найдите бота по username
-3. Добавьте его администратором
-
-## 9. Какие права нужны
-
-- **Post messages** — обязательно
-- Остальные права не требуются
-- User-аккаунт Telethon должен уметь вызывать `payments.getStarGifts` и `payments.getResaleStarGifts` (обычный пользовательский аккаунт)
-
-## 10. Первый запуск Telethon
-
-Программа больше не спрашивает номер в терминале (в Docker это падает с `EOFError`).
-
-1. Запустите tracker
-2. Напишите боту `/start`
-3. Отправьте `/login`
-4. Пришлите номер телефона, например `+79001234567`
-5. Пришлите код из Telegram
-6. Если включён 2FA — пришлите облачный пароль
-
-Сессия сохраняется в `sessions/market_tracker.session`. Номер, код и пароль в файлы проекта не пишутся и в лог не попадают. Отмена: `/cancel`.
-
-`/start` также регистрирует личный чат как получателя лотов. Без этого бот не сможет доставить объявления, если в `.env` указан его собственный id.
-
-## 11. Как работает Marketplace scanner
-
-1. `payments.getStarGifts` — каталог типов подарков и их `gift_id`
-2. Для каждого `gift_id` вызывается `payments.getResaleStarGifts` с `stars_only=true`
-3. `sort_by_price` и `sort_by_num` **не** используются: Telegram тогда отдаёт лоты по Unix-времени последнего изменения цены (убывание) — это приоритет для свежих объявлений
-4. Пагинация идёт по `next_offset`, пока он не пустой, не зациклился, не исчерпан лимит страниц или пока не пошла пачка уже известных лотов
-5. Новые лоты определяются по стабильному `listing_key` (предпочтительно `starGiftUnique.id`)
-
-## 12. Как работают фильтры
-
-Порядок:
-
-1. Новый лот / изменение цены
-2. Collectible/resale
-3. Цена `5000–30000` ⭐
-4. Model / symbol / backdrop (если списки в `.env` не пустые)
-5. Диапазон номера NFT
-6. Blacklist, затем whitelist
-7. Русский язык публичного текста профиля
-8. Количество collectible gifts `0–12`
-9. Free messages (только флаг Telegram API)
-10. Account level (`userFull.stars_rating.level`), если фильтр включён
-11. Ручные метки пола/национальности/тега
-12. Score
-
-Whitelist ограничивает **чьи** лоты можно публиковать, но не отключает цену, NFT, язык и остальные обязательные проверки.
-
-## 13. SQLite
-
-Файл: `data/tracker.db`
-
-Таблицы:
-
-- `listings` — лоты, статусы `NEW / QUEUED / SENT / SKIPPED / ERROR`
-- `profiles` — кэш публичных профилей
-- `profile_preferences` — ручные метки
-- `price_history` — история цен
-- `scanner_state` — pagination offset
-- `stats` — зарезервировано
-
-После перезапуска уже отправленные `listing_key` повторно не публикуются. Изменение цены в диапазон `5000–30000` считается новым сигналом, одно и то же изменение дважды не отправляется.
-
-## 14. Очередь
-
-Используется `asyncio.PriorityQueue` с лимитом `MAX_QUEUE_SIZE` (по умолчанию 100).
-
-Приоритет выше у лотов с большим score, избранной моделью, меньшим номером и более выгодной ценой внутри диапазона.
-
-Если очередь полная:
+Обязательно задайте **реальный канал**:
 
 ```
-[QUEUE] Queue is full, listing skipped
+TARGET_CHANNEL_ID=-100xxxxxxxxxx
 ```
 
-## 15. Почему задержка 4 секунды
-
-`PUBLISH_DELAY=4` — пауза **после успешной** публикации, в том числе между каналами. Несколько сообщений одновременно не отправляются.
-
-## 16. Ручные метки
-
-Трекер **не** угадывает пол и национальность.
+Несколько каналов:
 
 ```
-/tag USER_ID gender=female nationality=ru tag=trusted
-/tag USER_ID gender=male
-/tag USER_ID nationality=ru
-/tag USER_ID gender=unknown nationality=unknown
-/untag USER_ID
-/profile USER_ID
+TARGET_CHANNELS=-100111,-100222
 ```
 
-Допустимые теги: `trusted`, `interesting`, `ignore`, `favorite`. Профили с `ignore` не публикуются.
+`8825465611` — id самого бота. Это **не** канал. Лоты туда не отправляются. `ADMIN_USER_ID` тоже не является target channel.
 
-Фильтры из `.env`:
+Ключевые настройки:
 
-- `MANUAL_GENDER_FILTER=female` — только вручную помеченные `female`
-- `MANUAL_NATIONALITY_FILTER=ru` — только вручную помеченные `ru`
-- пустое значение — фильтр выключен
-- если фильтр включён, а профиль не размечен — SKIP
+| Переменная | Смысл |
+| --- | --- |
+| `MIN_PRICE` / `MAX_PRICE` | 5000–30000 Stars |
+| `PUBLISH_DELAY` | пауза 4 секунды между успешными публикациями |
+| `MANUAL_GENDER_FILTER` | например `female`; без ручной метки — SKIP |
+| `RUSSIAN_LANGUAGE_REQUIRED` | русскоязычный **публичный текст** профиля |
+| `MAX_NFT_COUNT` | максимум 12 collectible NFT |
+| `STRICT_NFT_FILTER` | `true` → неизвестный NFT count = SKIP |
+| `REQUIRE_FREE_MESSAGES` | неизвестно/платно = SKIP |
+| `ENABLE_ACCOUNT_LEVEL_FILTER` | только если API отдаёт `stars_rating.level` |
+| `MARKET_SAMPLE_SIZE` | до 20 comparable listings |
+| `MAX_MARKET_RATIO` | `listing / market_value`; выше 3.0 → SKIP |
+| `MARKET_CACHE_TTL` | кэш market value, секунды |
+| `STRICT_MARKET_FILTER` | нет comparable → SKIP |
+| `DIVERSIFY_GIFTS` / `MAX_SAME_GIFT_STREAK` | не слать один `gift_id` подряд |
+| `WHITELIST_USERS` / `BLACKLIST_USERS` | blacklist важнее |
+| `FAVORITE_MODELS` | бонус к score, **не** обходит market filter |
+| `DB_BACKUP_INTERVAL` | backup SQLite, по умолчанию 3600 |
+| `DEBUG` | подробные логи без секретов |
 
-## 17. Какие данные Telegram API может не предоставлять
-
-Безопасные fallback (программа не падает и ничего не выдумывает):
-
-| Данные | Источник | Если нет |
-| --- | --- | --- |
-| Цена | `starGiftUnique.resell_amount` → `starsAmount` | SKIP |
-| Slug / ссылка | `slug` | поле не показывается |
-| Model / symbol / backdrop | `StarGiftAttribute*` | `None`, фильтр allowlist пропускает лот только если список пуст или значение есть |
-| NFT count | подсчёт `StarGiftUnique` через `payments.getSavedStarGifts` | при `STRICT_NFT_FILTER=false` не отклоняет |
-| Free messages | `user` / `userFull.send_paid_messages_stars` | `unknown`; при `REQUIRE_FREE_MESSAGES=true` → SKIP |
-| Account level | `userFull.stars_rating.level` | лог `[PROFILE] Account level unavailable through Telegram API`; при выключенном фильтре не отклоняет |
-| Username, bio, канал | публичный User / UserFull | поля пустые, score ниже |
-| Картинка лота | document атрибута модели | отправляется только текст: бот не может прикрепить файл из user-session без отдельной загрузки |
-
-Offset пагинации сохраняется в `scanner_state`, но **новый цикл сканирования всегда начинается с пустого offset**: результаты отсортированы от самых свежих, восстановление старого offset после рестарта небезопасно и привело бы к пропуску новых лотов. Битый offset сбрасывается.
-
-## 18. Запуск
+## 4. Первый запуск
 
 ```bash
 python -m app.main
 ```
 
-Остановка: `Ctrl+C`. Корректно закрываются scanner, publisher, bot, Telethon и SQLite.
+1. Напишите боту `/start` — это **команды**, лоты сюда не приходят.
+2. `/login` → телефон → код Telegram → 2FA при необходимости.
+3. Tracker делает **initial snapshot** текущих listings.
+4. После snapshot включается **LIVE mode**.
 
-## 19. Команда /status
+Сессия: `sessions/market_tracker.session`. Код и пароль в файлы и логи не пишутся. Отмена: `/cancel`.
 
-Напишите боту `/status`:
+## 5. Telegram login
 
-- Scanner: `RUNNING` / `PAUSED` / `STOPPED`
-- Publisher: `RUNNING` / `WAITING` / `STOPPED`
-- User session: `AUTHORIZED` / `WAITING_LOGIN`
-- Queue, last scan/publish, scanned, new, filtered, sent, errors
+Вход только через бота (`/login`). Терминал не используется (в Docker `input()` даёт `EOFError`).
 
-`/pause` останавливает получение новых лотов. Publisher досылает очередь. `/resume` продолжает сканирование.
+User-аккаунт должен уметь вызывать реальные методы:
 
-## 20. Команда /stats
+- `payments.getStarGifts`
+- `payments.getResaleStarGifts`
+- `payments.getStarGifts` / `payments.getSavedStarGifts` / `payments.getUniqueStarGift` — где это нужно для NFT count и recheck
 
-`/stats` показывает статистику текущего запуска: scanned, duplicates, фильтры, queued, sent, send_errors, price_changes, floodwaits, average_scan_time, average_publish_time.
+Поля вроде `listing.created_at` **нет** в Telegram API. Tracker их не выдумывает.
 
-## Дополнительно
+## 6. Initial snapshot
 
-### Ошибки администратору
+Состояние `scanner_mode`:
 
-Укажите `ADMIN_USER_ID`. Критические ошибки scanner/publisher/сессии/канала/БД приходят админу. FloodWait в статистику пишется, но критической ошибкой не считается. Секреты в уведомления не попадают.
+`INITIAL_SNAPSHOT` → `LIVE`
 
-### Кэш профилей
+При первом запуске (пустая БД):
 
-`PROFILE_CACHE_TTL=300` — повторно не дергать Telegram, если профиль обновлялся меньше 5 минут назад. Перед публикацией профиль всё равно перепроверяется.
+1. Сканер получает текущие resale listings.
+2. Записывает их в SQLite со статусом `EXISTING`.
+3. **Ничего не публикует.**
+4. Только после полного прохода включает LIVE.
 
-### Backup SQLite
+Лог:
 
-`DB_BACKUP_INTERVAL=3600` — копии в `data/backups/`, не чаще заданного интервала.
+```
+[SNAPSHOT] Existing listing -> SKIP gift:...
+[LIVE] Initial snapshot complete. Switching to LIVE mode
+```
 
-### Debug
+## 7. Live mode
 
-`DEBUG=true` включает технические логи: страницы pagination, `next_offset`, тайминги, причины фильтров, размер очереди, операции БД. Не логируются `API_HASH`, `BOT_TOKEN`, код входа и 2FA.
+Только LIVE может создавать `NEW` listings.
 
-### Тесты
+```
+[LIVE] New listing detected: ...
+[FILTER] Price PASS: 12000
+[MARKET] Estimated market value: 18000
+[MARKET] Ratio: 0.67
+[FILTER] PASS
+[QUEUE] Added
+[PUBLISHER] Sending to TARGET_CHANNEL_ID ...
+[PUBLISHER] Sent successfully
+```
+
+## 8. Как указать TARGET_CHANNEL_ID
+
+1. Создайте канал или супергруппу.
+2. Добавьте бота администратором с правом **Post messages**.
+3. Узнайте id (обычно `-100...`) через @userinfobot или логи бота.
+4. Пропишите `TARGET_CHANNEL_ID` в `.env`.
+5. Несколько целей: `TARGET_CHANNELS=`.
+
+Админский чат, личка бота и пользователь, который нажал `/start`, **никогда** не считаются target channel.
+
+Публикация идёт только из `app/notifications/publisher.py`.
+
+## 9. Как работает market value
+
+Для нового listing Tracker запрашивает comparable resale listings того же `gift_id` (тот же collectible). По возможности оставляются лоты с той же model / symbol / backdrop. Сам проверяемый listing в выборку **не** входит.
+
+Из цен считается **медиана**, не max и не случайная цена.
+
+Пример: `500, 550, 600, 620, 650, 700, 25000` → market_value ≈ `620`.
+
+Дополнительно:
+
+- `floor_price` = минимум выборки
+- `sample_size` ≤ `MARKET_SAMPLE_SIZE` (20)
+- `confidence`: `<5` low, `5–9` medium, `10+` high
+- `price_ratio = listing_price / market_value`
+- если `listing_price > market_value * MAX_MARKET_RATIO` (3.0) → SKIP
+- `discount_percent = ((market_value - listing_price) / market_value) * 100`
+
+Кэш `market_prices`, ключ `gift_id|model|symbol|backdrop`, TTL `MARKET_CACHE_TTL=60`.
+
+Market filter — **hard filter**. Score и favorite models его не обходят. Listing за 25000 при market 600 отклоняется.
+
+Если comparable нет, значение не выдумывается. При `STRICT_MARKET_FILTER=true` такой лот пропускается.
+
+## 10. Почему старые listings не отправляются
+
+- Первый запуск = snapshot, статус `EXISTING`.
+- У каждого лота стабильный `listing_key` (`gift:{starGiftUnique.id}` или fallback `slug:...`).
+- Если ключ уже есть в SQLite — это не NEW.
+- `first_seen_at` значит только «tracker впервые увидел этот listing», это **не** время создания лота в Telegram.
+- После перезапуска старые ключи не публикуются повторно.
+- Статус `SENT` никогда не отправляется снова.
+
+## 11. Ручной gender
+
+Tracker **не** определяет пол по фото, имени, username, аватару, языку или описанию.
+
+Метка только вручную:
+
+```
+/tag USER_ID gender=female
+/tag USER_ID gender=male
+/tag USER_ID gender=unknown
+/untag USER_ID
+/profile USER_ID
+```
+
+При `MANUAL_GENDER_FILTER=female` проходят только профили с меткой `female`. Нет метки → SKIP.
+
+## 12. Очередь
+
+Архитектура:
+
+```
+Scanner → filters (включая market) → Queue → Publisher → TARGET_CHANNEL_ID
+```
+
+Scanner сам лоты не публикует. Очередь приоритетная, лимит `MAX_QUEUE_SIZE`.
+
+`/pause` сбрасывает текущую очередь. После `/resume` накопленные лоты не публикуются «как новые». Сканер при паузе может обновлять БД, но в publisher ничего не отправляет.
+
+## 13. Задержка 4 секунды
+
+После **успешной** публикации listing:
+
+```
+listing 1 -> send
+wait 4 sec
+listing 2 -> send
+```
+
+Массовой отправки через `asyncio.gather()` нет.
+
+## 14. Anti-duplicate
+
+- `listing_key UNIQUE` в SQLite
+- проверка перед queue и перед send
+- после успеха: `status=SENT`, `sent_at=NOW`
+- изменение цены — новая запись в `listing_price_history`, это **не** новый listing
+
+Одинаковый `gift_id` не идёт подряд, если в очереди есть другой (`DIVERSIFY_GIFTS=true`, `MAX_SAME_GIFT_STREAK=1`). Повтор разрешён только если альтернативы нет или диверсификация выключена.
+
+## 15. FloodWait
+
+`FloodWaitError` / `TelegramRetryAfter`: Tracker ждёт `N` секунд (`await asyncio.sleep(N)`) и не спамит повторными запросами. Ошибка уходит админу с троттлингом, лоты в админку не перекладываются.
+
+## 16. Что Telegram API объективно не даёт
+
+Программа не выдумывает поля.
+
+| Данные | Источник | Если нет |
+| --- | --- | --- |
+| Время создания listing | нет такого поля | используется только `first_seen_at` трекера |
+| Цена | `starGiftUnique.resell_amount` → `StarsAmount` | SKIP |
+| Model / symbol / backdrop | `StarGiftAttribute*` | comparable по атрибуту ужесточается только если атрибут есть |
+| NFT count | подсчёт unique gifts через `payments.getSavedStarGifts` | `STRICT_NFT_FILTER` |
+| Free messages | `send_paid_messages_stars` | unknown; при `REQUIRE_FREE_MESSAGES=true` → SKIP |
+| Account level | `userFull.stars_rating.level` | не симулируется; фильтр включён и значение неизвестно → SKIP |
+| Пол / национальность | только ручные метки | автодетект запрещён |
+| Market value | медиана чужих resale того же gift | нет выборки → не выдумывается |
+
+Pagination: `next_offset` пишется в `scanner_state`. Каждый цикл LIVE начинается с пустого offset (свежие лоты первыми). Зацикливание offset прерывается.
+
+## Команды бота
+
+`/start` `/login` `/pause` `/resume` `/status` `/stats` `/tag` `/untag` `/profile` `/cancel`
+
+`/status` показывает mode, TARGET_CHANNEL_ID, queue, scanned / existing / new / sent / errors.
+
+## Pipeline
+
+```
+Telegram Marketplace
+→ Scanner
+→ NEW / EXISTING
+→ price → NFT → profile cache → manual gender → language
+→ free messages → account level → market value
+→ whitelist/blacklist → score
+→ Queue → gift diversification → 4s delay → recheck
+→ Publisher → TARGET_CHANNEL_ID
+```
+
+Админ отдельно:
+
+```
+Bot → commands / errors / stats → ADMIN_USER_ID
+```
+
+## SQLite
+
+Файл: `data/tracker.db`
+
+Таблицы: `listings`, `listing_price_history`, `market_prices`, `profiles`, `manual_tags`, `scanner_state`, `scanner_meta`, `queue`, `stats`.
+
+Backup: `DB_BACKUP_INTERVAL=3600`, каталог `data/backups/`, через SQLite backup API (WAL не ломается).
+
+## Тесты
 
 ```bash
+python -m compileall app tests
 python -m unittest discover -s tests -v
+pytest -q
 ```
 
 ## Структура
@@ -245,13 +291,10 @@ python -m unittest discover -s tests -v
 app/
   main.py
   config.py
-  telegram/          user client + aiogram bot
-  marketplace/       scanner, parser, filters, models
-  profile/           analyzer + language
+  telegram/          user client + aiogram bot (команды/ошибки)
+  marketplace/       scanner, parser, filters, market, models
+  profile/           analyzer + language of public text
   storage/           sqlite + backup
-  notifications/     publisher + admin alerts
+  notifications/     publisher (только TARGET_CHANNEL_ID) + admin alerts
   utils/             logger, rate limit, queue, stats
-tests/
-sessions/
-data/
 ```

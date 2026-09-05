@@ -5,6 +5,7 @@ import signal
 from pathlib import Path
 
 from app.config import DATA_DIR, load_settings
+from app.marketplace.market import MarketEstimator
 from app.marketplace.scanner import MarketplaceScanner
 from app.notifications.alerts import AlertManager
 from app.notifications.publisher import Publisher
@@ -29,7 +30,7 @@ async def backup_loop(state: AppState, db: Database, backup_dir: str, interval: 
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            log("ERROR", f"SQLite backup failed: {type(error).__name__}: {redact_secrets(str(error))}")
+            log("DATABASE", f"SQLite backup failed: {type(error).__name__}: {redact_secrets(str(error))}")
 
 
 async def run_tracker() -> None:
@@ -40,6 +41,14 @@ async def run_tracker() -> None:
 
     db = Database(settings.db_path)
     state = AppState(settings.max_queue_size)
+    stored_mode = db.get_scanner_mode()
+    if stored_mode:
+        state.scanner_mode = stored_mode
+    elif db.listing_count() > 0:
+        from app.marketplace.models import SCANNER_MODE_LIVE
+
+        state.scanner_mode = SCANNER_MODE_LIVE
+        db.set_scanner_mode(SCANNER_MODE_LIVE)
     limiter = ApiLimiter(concurrency=1, min_interval=0.3)
     client = build_user_client(settings)
     bot = None
@@ -69,9 +78,10 @@ async def run_tracker() -> None:
             if not await client.is_user_authorized():
                 return
             analyzer = ProfileAnalyzer(client, db, settings, limiter, state.stats)
+            market = MarketEstimator(settings, db, client, limiter, state.stats)
             ctx_bind_analyzer(analyzer)
-            scanner = MarketplaceScanner(settings, state, db, client, analyzer, limiter, alerts)
-            publisher = Publisher(settings, state, db, bot, client, analyzer, alerts)
+            scanner = MarketplaceScanner(settings, state, db, client, analyzer, limiter, alerts, market)
+            publisher = Publisher(settings, state, db, bot, client, analyzer, alerts, market)
             tasks.append(asyncio.create_task(scanner.run(), name="scanner"))
             tasks.append(asyncio.create_task(publisher.run(), name="publisher"))
             state.user_authorized = True
@@ -85,11 +95,16 @@ async def run_tracker() -> None:
         bot, dp = setup_bot(settings, state, db, analyzer, client=client, on_authorized=start_workers)
         alerts.bind_bot(bot)
         try:
-            await verify_target_channels(bot, settings)
+            usable = await verify_target_channels(bot, settings)
+            if not usable:
+                await alerts.notify(
+                    "ChannelCheck",
+                    "TARGET_CHANNEL_ID is missing or invalid. Marketplace listings will not be published "
+                    "until a real channel id is configured. Admin chat is never used for listings.",
+                )
         except Exception as error:
             log("ERROR", str(error))
             await alerts.notify("ChannelCheck", error)
-            raise
 
         if authorized:
             await start_workers()

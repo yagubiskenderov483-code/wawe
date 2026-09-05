@@ -12,5 +12,5 @@ def create_backup(db: Database, backup_dir: str) -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     dest = str(Path(backup_dir) / f"tracker_{stamp}.db")
     db.backup_to(dest)
-    log("BACKUP", f"SQLite backup saved to {dest}")
+    log("DATABASE", f"SQLite backup saved to {dest}")
     return dest

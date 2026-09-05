@@ -19,7 +19,6 @@ DEFAULT_API_ID = 36101343
 DEFAULT_API_HASH = "116195fa5e0459d25a9a6266b40807d7"
 DEFAULT_BOT_TOKEN = "8825465611:AAFdbsizmYkOgV2bCzTY9z2Q4ZDELYshcpA"
 DEFAULT_BOT_USERNAME = "jsjeigiejwhnewbot"
-DEFAULT_TARGET_CHANNEL_ID = 8825465611
 
 
 def _env(name: str, default: str = "") -> str:
@@ -41,6 +40,13 @@ def _env_optional_int(name: str) -> int | None:
     if raw == "":
         return None
     return int(raw)
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = _env(name, "")
+    if raw == "":
+        return default
+    return float(raw)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -74,6 +80,13 @@ def _csv_channel_ids(name: str) -> tuple[int, ...]:
     for item in _csv_strings(name):
         values.append(int(item))
     return tuple(values)
+
+
+def bot_user_id_from_token(token: str | None) -> int | None:
+    prefix = (token or "").split(":", 1)[0]
+    if prefix.isdigit():
+        return int(prefix)
+    return None
 
 
 @dataclass(frozen=True)
@@ -115,8 +128,19 @@ class Settings:
     db_path: str = str(DB_PATH)
     backup_dir: str = str(BACKUP_DIR)
     max_pages_per_gift: int = 8
+    max_snapshot_pages_per_gift: int = 40
     resale_page_limit: int = 50
     max_api_backoff: int = 32
+    market_sample_size: int = 20
+    max_market_ratio: float = 3.0
+    market_cache_ttl: int = 60
+    strict_market_filter: bool = True
+    diversify_gifts: bool = True
+    max_same_gift_streak: int = 1
+
+    @property
+    def bot_user_id(self) -> int | None:
+        return bot_user_id_from_token(self.bot_token)
 
     @property
     def channel_ids(self) -> tuple[int, ...]:
@@ -125,9 +149,16 @@ class Settings:
         for value in (self.target_channel_id, *self.target_channels):
             if value is None or value in seen:
                 continue
-            seen.add(value)
-            ids.append(value)
+            seen.add(int(value))
+            ids.append(int(value))
         return tuple(ids)
+
+    def publish_targets(self, bot_id: int | None = None) -> tuple[int, ...]:
+        return resolve_publish_targets(
+            self.channel_ids,
+            bot_id=bot_id if bot_id is not None else self.bot_user_id,
+            admin_id=self.admin_user_id,
+        )
 
     def is_favorite_model(self, model: str | None) -> bool:
         if not model or not self.favorite_models:
@@ -142,25 +173,42 @@ class Settings:
         return self.manual_nationality_filter.strip().lower()
 
 
-def resolve_publish_chat_ids(
+def resolve_publish_targets(
     configured: tuple[int, ...],
-    operator_chats: tuple[int, ...],
     bot_id: int | None = None,
+    admin_id: int | None = None,
 ) -> tuple[int, ...]:
-    """Skip the bot's own id; deliver to real channels and operator private chats."""
+    """Marketplace listings go only to TARGET_CHANNEL_ID / TARGET_CHANNELS.
+
+    Never to the bot's own id, ADMIN_USER_ID, or any operator private chat.
+    """
     ids: list[int] = []
     seen: set[int] = set()
-    for value in (*configured, *operator_chats):
+    blocked: set[int] = set()
+    if bot_id is not None:
+        blocked.add(int(bot_id))
+    if admin_id is not None:
+        blocked.add(int(admin_id))
+    for value in configured:
         if value is None:
             continue
         chat_id = int(value)
-        if bot_id is not None and chat_id == int(bot_id):
-            continue
-        if chat_id in seen:
+        if chat_id in blocked or chat_id in seen:
             continue
         seen.add(chat_id)
         ids.append(chat_id)
     return tuple(ids)
+
+
+def resolve_publish_chat_ids(
+    configured: tuple[int, ...],
+    operator_chats: tuple[int, ...] = (),
+    bot_id: int | None = None,
+    admin_id: int | None = None,
+) -> tuple[int, ...]:
+    """Publish path ignores operator chats. Kept for older tests/callers."""
+    del operator_chats
+    return resolve_publish_targets(configured, bot_id=bot_id, admin_id=admin_id)
 
 
 def load_settings() -> Settings:
@@ -177,14 +225,12 @@ def load_settings() -> Settings:
         bot_token = DEFAULT_BOT_TOKEN
 
     target_raw = _env("TARGET_CHANNEL_ID")
-    target_channel_id = DEFAULT_TARGET_CHANNEL_ID
-    if target_raw and target_raw != "PUT_CHANNEL_ID_HERE":
+    target_channel_id = None
+    if target_raw and target_raw not in {"PUT_CHANNEL_ID_HERE", "0"}:
         target_channel_id = int(target_raw)
 
     bot_username = _env("BOT_USERNAME", DEFAULT_BOT_USERNAME).lstrip("@") or DEFAULT_BOT_USERNAME
     target_channels = _csv_channel_ids("TARGET_CHANNELS")
-    if not target_channels:
-        target_channels = (DEFAULT_TARGET_CHANNEL_ID,)
 
     settings = Settings(
         api_id=int(api_id_raw),
@@ -220,9 +266,19 @@ def load_settings() -> Settings:
         admin_user_id=_env_optional_int("ADMIN_USER_ID"),
         debug=_env_bool("DEBUG", False),
         db_backup_interval=_env_int("DB_BACKUP_INTERVAL", 3600),
+        market_sample_size=_env_int("MARKET_SAMPLE_SIZE", 20),
+        max_market_ratio=_env_float("MAX_MARKET_RATIO", 3.0),
+        market_cache_ttl=_env_int("MARKET_CACHE_TTL", 60),
+        strict_market_filter=_env_bool("STRICT_MARKET_FILTER", True),
+        diversify_gifts=_env_bool("DIVERSIFY_GIFTS", True),
+        max_same_gift_streak=_env_int("MAX_SAME_GIFT_STREAK", 1),
+        max_snapshot_pages_per_gift=_env_int("MAX_SNAPSHOT_PAGES_PER_GIFT", 40),
     )
     if not settings.channel_ids:
-        raise RuntimeError("TARGET_CHANNEL_ID or TARGET_CHANNELS must be configured")
+        raise RuntimeError(
+            "TARGET_CHANNEL_ID or TARGET_CHANNELS must be configured with a real "
+            "channel/supergroup id (usually -100...). Do not use the bot id or ADMIN_USER_ID."
+        )
     return settings
 
 

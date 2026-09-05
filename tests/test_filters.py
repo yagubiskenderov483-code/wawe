@@ -113,6 +113,10 @@ class ListFilterTests(unittest.TestCase):
         self.assertTrue(check_blacklist(passing_profile(user_id=999, username="ok"), cfg).passed)
         by_name = check_blacklist(passing_profile(user_id=5, username="spamuser"), cfg)
         self.assertFalse(by_name.passed)
+        listing = passing_listing(price=25000, market_value=600)
+        result = should_publish(listing, passing_profile(user_id=111), cfg)
+        self.assertFalse(result.passed)
+        self.assertEqual(result.reason, "blacklist_hit")
 
 
 class LanguageAndProfileTests(unittest.TestCase):
@@ -132,6 +136,7 @@ class LanguageAndProfileTests(unittest.TestCase):
         enabled = settings(enable_account_level_filter=True, max_account_level=2)
         self.assertTrue(check_account_level(passing_profile(account_level=2), enabled).passed)
         self.assertFalse(check_account_level(passing_profile(account_level=3), enabled).passed)
+        self.assertFalse(check_account_level(passing_profile(account_level=None), enabled).passed)
         disabled = settings(enable_account_level_filter=False)
         self.assertTrue(check_account_level(passing_profile(account_level=99), disabled).passed)
 
@@ -141,6 +146,9 @@ class LanguageAndProfileTests(unittest.TestCase):
         failed = check_manual_profile_tags(passing_profile(manual_gender="male"), settings=cfg)
         self.assertFalse(failed.passed)
         self.assertEqual(failed.reason, "manual_gender_mismatch")
+        missing = check_manual_profile_tags(passing_profile(manual_gender=None), settings=cfg)
+        self.assertFalse(missing.passed)
+        self.assertEqual(missing.reason, "manual_gender_missing")
 
     def test_manual_nationality_filter(self):
         cfg = settings(manual_nationality_filter="ru")

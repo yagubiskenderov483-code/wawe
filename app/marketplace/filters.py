@@ -4,7 +4,7 @@ from typing import Iterable, Optional
 
 from app.config import Settings
 from app.marketplace.models import FilterResult, Listing, Profile
-from app.utils.logger import log
+from app.utils.logger import debug, log
 
 
 def _ok(reason: str) -> FilterResult:
@@ -35,15 +35,15 @@ def check_collectible(listing: Listing) -> FilterResult:
 def check_price(listing: Listing, settings: Settings) -> FilterResult:
     price = listing.price
     if price is None:
-        log("FILTER", "Цена: неизвестна -> SKIP")
+        log("FILTER", "Price unknown -> SKIP")
         return _fail("price_unknown")
     if price < settings.min_price:
-        log("FILTER", f"Цена: {price} ⭐ -> SKIP")
+        log("FILTER", f"Price SKIP: {price}")
         return _fail("price_below_min")
     if price > settings.max_price:
-        log("FILTER", f"Цена: {price} ⭐ -> SKIP")
+        log("FILTER", f"Price SKIP: {price}")
         return _fail("price_above_max")
-    log("FILTER", f"Цена: {price} ⭐ -> PASS")
+    log("FILTER", f"Price PASS: {price}")
     return _ok("price_ok")
 
 
@@ -137,6 +137,12 @@ def check_whitelist(profile: Profile, settings: Settings, listing: Listing | Non
     return _fail("whitelist_miss")
 
 
+def is_whitelisted(profile: Profile, settings: Settings, listing: Listing | None = None) -> bool:
+    if not settings.whitelist_users:
+        return False
+    return bool(_owner_tokens(profile, listing) & set(settings.whitelist_users))
+
+
 def check_language(profile: Profile, settings: Settings) -> FilterResult:
     language = profile.language or "unknown"
     if not settings.russian_language_required:
@@ -187,7 +193,8 @@ def check_account_level(profile: Profile, settings: Settings) -> FilterResult:
     level = profile.account_level
     if level is None:
         log("PROFILE", "Account level unavailable through Telegram API")
-        return _ok("account_level_unavailable")
+        log("FILTER", "Account level: unknown -> SKIP")
+        return _fail("account_level_unavailable")
     if level > settings.max_account_level:
         log("FILTER", f"Account level: {level} -> SKIP")
         return _fail("account_level_too_high")
@@ -214,8 +221,11 @@ def check_manual_profile_tags(
 
     gender_filter = settings.normalized_gender_filter()
     if gender_filter:
+        if not gender:
+            log("FILTER", "Manual gender: unmarked -> SKIP")
+            return _fail("manual_gender_missing")
         if gender != gender_filter:
-            log("FILTER", f"Manual gender: {gender or 'unmarked'} -> SKIP")
+            log("FILTER", f"Manual gender: {gender} -> SKIP")
             return _fail("manual_gender_mismatch")
         log("FILTER", f"Manual gender: {gender} -> PASS")
 
@@ -227,6 +237,25 @@ def check_manual_profile_tags(
         log("FILTER", f"Manual nationality: {nationality} -> PASS")
 
     return _ok("manual_tags_ok")
+
+
+def check_market_value(listing: Listing, settings: Settings) -> FilterResult:
+    if listing.market_value is None or listing.market_value <= 0:
+        if settings.strict_market_filter:
+            log("FILTER", "Market value unavailable -> SKIP")
+            return _fail("market_unavailable")
+        log("FILTER", "Market value unavailable -> PASS")
+        return _ok("market_unavailable_permissive")
+    if listing.price is None:
+        return _fail("price_unknown")
+    ratio = listing.price / listing.market_value
+    listing.price_ratio = ratio
+    listing.discount_percent = ((listing.market_value - listing.price) / listing.market_value) * 100.0
+    if listing.price > listing.market_value * settings.max_market_ratio:
+        log("FILTER", f"Market ratio SKIP: {ratio:.2f}")
+        return _fail("market_ratio_too_high")
+    log("FILTER", f"Market ratio PASS: {ratio:.2f}")
+    return _ok("market_ok")
 
 
 def calculate_profile_score(profile: Profile) -> int:
@@ -260,6 +289,8 @@ def calculate_listing_score(listing: Listing, settings: Settings) -> int:
         score += 1
     if settings.is_favorite_model(listing.model):
         score += 2
+    if listing.discount_percent is not None and listing.discount_percent > 0:
+        score += 1
     return score
 
 
@@ -268,6 +299,7 @@ def calculate_score(listing: Listing, profile: Profile, settings: Settings) -> t
     profile_score = calculate_profile_score(profile)
     total = listing_score + profile_score
     listing.score = total
+    listing.profile_score = profile_score
     return total, listing_score, profile_score
 
 
@@ -285,45 +317,80 @@ def calculate_priority(listing: Listing, profile: Profile, settings: Settings) -
             priority += 2
     if settings.is_favorite_model(listing.model):
         priority += 12
+    if listing.discount_percent is not None and listing.discount_percent > 0:
+        priority += min(20, int(listing.discount_percent // 5))
     return priority
 
 
-def should_publish(listing: Listing, profile: Profile, settings: Settings) -> FilterResult:
-    checks = [
+def technical_checks(listing: Listing, settings: Settings) -> list[FilterResult]:
+    return [
         check_collectible(listing),
         check_price(listing, settings),
         check_model(listing, settings),
         check_symbol(listing, settings),
         check_backdrop(listing, settings),
         check_gift_number(listing, settings),
-        check_blacklist(profile, settings, listing),
-        check_whitelist(profile, settings, listing),
-        check_language(profile, settings),
+    ]
+
+
+def profile_checks(profile: Profile, settings: Settings, listing: Listing | None = None) -> list[FilterResult]:
+    return [
         check_nft_count(profile, settings),
+        check_manual_profile_tags(profile, settings=settings),
+        check_language(profile, settings),
         check_free_messages(profile, settings),
         check_account_level(profile, settings),
-        check_manual_profile_tags(profile, settings=settings),
     ]
-    for result in checks:
+
+
+def should_publish(
+    listing: Listing,
+    profile: Profile,
+    settings: Settings,
+    *,
+    skip_market: bool = False,
+) -> FilterResult:
+    for result in technical_checks(listing, settings):
         if not result.passed:
             return result
 
+    black = check_blacklist(profile, settings, listing)
+    if not black.passed:
+        return black
+
+    whitelisted = is_whitelisted(profile, settings, listing)
+    white = check_whitelist(profile, settings, listing)
+    if not white.passed:
+        return white
+
+    if not whitelisted:
+        for result in profile_checks(profile, settings, listing):
+            if not result.passed:
+                return result
+
+    if not skip_market:
+        market = check_market_value(listing, settings)
+        if not market.passed:
+            return market
+
     total, _listing_score, profile_score = calculate_score(listing, profile, settings)
-    if profile_score < settings.min_profile_score:
-        log("FILTER", f"Profile score: {profile_score} -> SKIP")
-        return _fail("profile_score_too_low")
-    if total < settings.min_score:
-        log("FILTER", f"Score: {total} -> SKIP")
-        return _fail("score_too_low")
-    log("FILTER", f"Score: {total} -> PASS")
+    if not whitelisted:
+        if profile_score < settings.min_profile_score:
+            log("FILTER", f"Profile score: {profile_score} -> SKIP")
+            return _fail("profile_score_too_low")
+        if total < settings.min_score:
+            log("FILTER", f"Score: {total} -> SKIP")
+            return _fail("score_too_low")
+    log("FILTER", "PASS")
+    debug("FILTER", f"Score: {total} profile={profile_score}")
     return _ok("publish_ok")
 
 
 def classify_filter_stat(reason: str) -> str | None:
     mapping = {
-        "price_unknown": "price_filtered",
-        "price_below_min": "price_filtered",
-        "price_above_max": "price_filtered",
+        "price_unknown": "skip_price",
+        "price_below_min": "skip_price",
+        "price_above_max": "skip_price",
         "model_missing": "rarity_filtered",
         "model_not_allowed": "rarity_filtered",
         "symbol_missing": "rarity_filtered",
@@ -333,20 +400,26 @@ def classify_filter_stat(reason: str) -> str | None:
         "gift_number_unknown": "number_filtered",
         "gift_number_below_min": "number_filtered",
         "gift_number_above_max": "number_filtered",
-        "blacklist_hit": "blacklist_filtered",
+        "blacklist_hit": "skip_blacklist",
         "whitelist_miss": "whitelist_filtered",
-        "language_unknown": "language_filtered",
-        "not_russian_language": "language_filtered",
-        "nft_count_unavailable": "nft_filtered",
-        "nft_count_above_12": "nft_filtered",
-        "free_messages_false": "free_message_filtered",
-        "free_messages_unknown": "free_message_filtered",
-        "account_level_too_high": "account_level_filtered",
-        "manual_gender_mismatch": "manual_tag_filtered",
+        "language_unknown": "skip_language",
+        "not_russian_language": "skip_language",
+        "nft_count_unavailable": "skip_nft",
+        "nft_count_above_12": "skip_nft",
+        "free_messages_false": "skip_free_messages",
+        "free_messages_unknown": "skip_free_messages",
+        "account_level_too_high": "skip_account_level",
+        "account_level_unavailable": "skip_account_level",
+        "manual_gender_mismatch": "skip_gender",
+        "manual_gender_missing": "skip_gender",
         "manual_nationality_mismatch": "manual_tag_filtered",
         "manual_tag_ignore": "manual_tag_filtered",
         "profile_score_too_low": "profile_filtered",
         "score_too_low": "profile_filtered",
         "not_collectible_resale": "profile_filtered",
+        "market_unavailable": "skip_market",
+        "market_ratio_too_high": "skip_market",
+        "already_sent": "skip_duplicate",
+        "duplicate": "skip_duplicate",
     }
     return mapping.get(reason)

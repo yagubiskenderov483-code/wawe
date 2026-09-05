@@ -5,7 +5,7 @@ import time
 from typing import Any, Optional
 
 from telethon import TelegramClient
-from telethon.tl.functions.payments import GetResaleStarGiftsRequest, GetStarGiftsRequest
+from telethon.tl.functions.payments import GetStarGiftsRequest
 from telethon.tl.types import StarGift, User
 from telethon.tl.types.payments import StarGifts, StarGiftsNotModified
 
@@ -21,6 +21,7 @@ from app.marketplace.filters import (
     check_gift_number,
     check_language,
     check_manual_profile_tags,
+    check_market_value,
     check_model,
     check_nft_count,
     check_price,
@@ -29,10 +30,16 @@ from app.marketplace.filters import (
     classify_filter_stat,
     should_publish,
 )
+from app.marketplace.market import MarketEstimator
 from app.marketplace.models import (
+    SCANNER_MODE_INITIAL_SNAPSHOT,
+    SCANNER_MODE_LIVE,
     STATUS_ERROR,
+    STATUS_EXISTING,
     STATUS_NEW,
+    STATUS_PRICE_CHANGED,
     STATUS_QUEUED,
+    STATUS_SENT,
     STATUS_SKIPPED,
     Listing,
     QueueItem,
@@ -57,6 +64,7 @@ class MarketplaceScanner:
         analyzer: ProfileAnalyzer,
         limiter: ApiLimiter,
         alerts: AlertManager,
+        market: MarketEstimator | None = None,
     ) -> None:
         self.settings = settings
         self.state = state
@@ -65,26 +73,40 @@ class MarketplaceScanner:
         self.analyzer = analyzer
         self.limiter = limiter
         self.alerts = alerts
+        self.market = market or MarketEstimator(settings, db, client, limiter, state.stats)
         self._gift_ids: list[int] = []
         self._gift_hash = 0
         self._users: dict[int, User] = {}
+        self._restore_mode()
+
+    def _restore_mode(self) -> None:
+        stored = self.db.get_scanner_mode()
+        if stored in {SCANNER_MODE_INITIAL_SNAPSHOT, SCANNER_MODE_LIVE}:
+            self.state.scanner_mode = stored
+            return
+        if self.db.listing_count() > 0:
+            self.db.set_scanner_mode(SCANNER_MODE_LIVE)
+            self.state.scanner_mode = SCANNER_MODE_LIVE
+            log("SCANNER", "Existing listings found: resuming in LIVE mode without republishing")
+            return
+        self.db.set_scanner_mode(SCANNER_MODE_INITIAL_SNAPSHOT)
+        self.db.set_meta("snapshot_started_at", utc_now_iso())
+        self.state.scanner_mode = SCANNER_MODE_INITIAL_SNAPSHOT
+        log("SNAPSHOT", "First run: capturing current listings without publishing")
+
+    def is_snapshot(self) -> bool:
+        return self.state.scanner_mode == SCANNER_MODE_INITIAL_SNAPSHOT
 
     async def run(self) -> None:
         self.state.scanner_running = True
         backoff = 2
-        log("SCAN", "Scanner started")
+        log("SCANNER", "Scanner started")
         try:
             while not self.state.shutdown:
                 if self.state.session_invalid:
                     log("ERROR", "Telegram user session is invalid, scanner stopped")
                     return
                 try:
-                    await self.state.pause_event.wait()
-                    if self.state.shutdown:
-                        return
-                    if self.state.scanner_paused:
-                        await sleep_seconds(0.5)
-                        continue
                     started = time.monotonic()
                     await self.scan_once()
                     self.state.stats.record_scan(time.monotonic() - started, utc_now_iso())
@@ -105,19 +127,29 @@ class MarketplaceScanner:
                     backoff = next_backoff(backoff, self.settings.max_api_backoff)
         finally:
             self.state.scanner_running = False
-            log("SCAN", "Scanner stopped")
+            log("SCANNER", "Scanner stopped")
 
     async def scan_once(self) -> None:
         self.state.stats.last_scan = utc_now_iso()
         gift_ids = await self._load_gift_ids()
-        debug("SCAN", f"Gift types for resale: {len(gift_ids)}")
+        debug("SCANNER", f"Gift types for resale: {len(gift_ids)}")
         total = 0
+        snapshot = self.is_snapshot()
         for gift_id in gift_ids:
-            if self.state.shutdown or self.state.scanner_paused:
+            if self.state.shutdown:
                 break
-            total += await self._scan_gift(gift_id)
+            total += await self._scan_gift(gift_id, snapshot=snapshot)
+        if snapshot and not self.state.shutdown:
+            self._finish_snapshot()
         if total:
-            log("SCAN", f"Получено {total} лотов")
+            tag = "SNAPSHOT" if snapshot else "SCANNER"
+            log(tag, f"Processed {total} listings")
+
+    def _finish_snapshot(self) -> None:
+        self.db.set_scanner_mode(SCANNER_MODE_LIVE)
+        self.db.set_meta("snapshot_completed_at", utc_now_iso())
+        self.state.scanner_mode = SCANNER_MODE_LIVE
+        log("LIVE", "Initial snapshot complete. Switching to LIVE mode")
 
     async def _load_gift_ids(self) -> list[int]:
         async def _call():
@@ -126,7 +158,7 @@ class MarketplaceScanner:
 
         result = await invoke_telegram(_call, stats=self.state.stats, max_backoff=self.settings.max_api_backoff)
         if isinstance(result, StarGiftsNotModified):
-            debug("SCAN", "Star gifts not modified")
+            debug("SCANNER", "Star gifts not modified")
             return list(self._gift_ids)
         if not isinstance(result, StarGifts):
             gifts = getattr(result, "gifts", None) or []
@@ -149,20 +181,21 @@ class MarketplaceScanner:
         chosen = ids or all_ids
         if chosen:
             self._gift_ids = chosen
-        debug("SCAN", f"Resale gift_ids={len(self._gift_ids)}")
+        debug("SCANNER", f"Resale gift_ids={len(self._gift_ids)}")
         return list(self._gift_ids)
 
-    async def _scan_gift(self, gift_id: int) -> int:
+    async def _scan_gift(self, gift_id: int, snapshot: bool = False) -> int:
         offset = ""
         pages = 0
         seen_offsets: set[str] = set()
         known_streak = 0
         found = 0
-        while pages < self.settings.max_pages_per_gift:
-            if self.state.shutdown or self.state.scanner_paused:
+        max_pages = self.settings.max_snapshot_pages_per_gift if snapshot else self.settings.max_pages_per_gift
+        while pages < max_pages:
+            if self.state.shutdown:
                 break
             if offset in seen_offsets:
-                debug("SCAN", f"Pagination loop detected for gift_id={gift_id}, reset offset")
+                debug("SCANNER", f"Pagination loop detected for gift_id={gift_id}, reset offset")
                 self.db.reset_scanner_offset(gift_id)
                 break
             seen_offsets.add(offset)
@@ -172,7 +205,7 @@ class MarketplaceScanner:
             except Exception as error:
                 message = str(error).upper()
                 if "OFFSET" in message:
-                    log("SCAN", f"Stored offset unusable for gift_id={gift_id}, resetting")
+                    log("SCANNER", f"Stored offset unusable for gift_id={gift_id}, resetting")
                     self.db.reset_scanner_offset(gift_id)
                     if offset:
                         offset = ""
@@ -185,7 +218,7 @@ class MarketplaceScanner:
                 if user_id is not None:
                     self._users[int(user_id)] = user
             debug(
-                "SCAN",
+                "SCANNER",
                 f"gift_id={gift_id} page={pages} objects={len(gifts)} users={len(users)} "
                 f"next_offset={getattr(result, 'next_offset', None)!r} time={time.monotonic() - page_started:.2f}s",
             )
@@ -203,13 +236,15 @@ class MarketplaceScanner:
             pages += 1
             if not next_offset:
                 break
-            if known_streak >= 12:
-                debug("SCAN", f"Stopping pagination for gift_id={gift_id}: reached known listings")
+            if not snapshot and known_streak >= 12:
+                debug("SCANNER", f"Stopping pagination for gift_id={gift_id}: reached known listings")
                 break
             offset = next_offset
         return found
 
     async def _fetch_resale_page(self, gift_id: int, offset: str) -> Any:
+        from telethon.tl.functions.payments import GetResaleStarGiftsRequest
+
         async def _call():
             async with self.limiter:
                 return await self.client(
@@ -228,6 +263,9 @@ class MarketplaceScanner:
         if listing is None:
             return None
         existing = self.db.get_listing(listing.listing_key)
+        if self.is_snapshot():
+            return self._snapshot_listing(listing, existing)
+
         signal = self._classify_signal(listing, existing)
         if signal is None:
             self.state.stats.inc("duplicates")
@@ -236,20 +274,51 @@ class MarketplaceScanner:
         if existing is None:
             listing.is_new = True
             listing.status = STATUS_NEW
-            self.db.insert_listing(listing)
+            listing.is_initial_snapshot = False
+            inserted = self.db.insert_listing(listing)
+            if not inserted:
+                self.state.stats.inc("duplicates")
+                self.state.stats.inc("skip_duplicate")
+                return False
             self.state.stats.inc("new_listings")
-            log("NEW", "Новый лот найден")
+            log("LIVE", f"New listing detected: {listing.listing_key} gift_id={listing.gift_id} price={listing.price}")
         else:
             listing.first_seen_at = existing.get("first_seen_at") or listing.first_seen_at
             listing.last_notified_price = existing.get("last_notified_price")
+            listing.is_initial_snapshot = bool(existing.get("is_initial_snapshot"))
             if signal == "price_change":
                 recorded = self.db.record_price_change(listing.listing_key, listing.old_price, listing.price)
                 if not recorded:
                     self.state.stats.inc("duplicates")
                     return False
                 listing.is_price_change = True
+                listing.status = STATUS_PRICE_CHANGED
                 self.state.stats.inc("price_changes")
+                log("LIVE", f"PRICE_CHANGED {listing.listing_key}: {listing.old_price} -> {listing.price}")
+            elif existing.get("sent_at") or existing.get("status") == STATUS_SENT:
+                return False
 
+        return await self._filter_and_maybe_queue(listing)
+
+    def _snapshot_listing(self, listing: Listing, existing: Optional[dict[str, Any]]) -> bool:
+        if existing is not None:
+            log("SNAPSHOT", f"Existing listing -> SKIP {listing.listing_key}")
+            self.state.stats.inc("existing")
+            return False
+        listing.is_new = False
+        listing.is_initial_snapshot = True
+        listing.status = STATUS_EXISTING
+        listing.skip_reason = "initial_snapshot"
+        inserted = self.db.insert_listing(listing)
+        if not inserted:
+            self.state.stats.inc("duplicates")
+            return False
+        self.db.mark_existing(listing.listing_key)
+        self.state.stats.inc("existing")
+        log("SNAPSHOT", f"Existing listing -> SKIP {listing.listing_key}")
+        return False
+
+    async def _filter_and_maybe_queue(self, listing: Listing) -> bool:
         cheap = [
             check_collectible(listing),
             check_price(listing, self.settings),
@@ -264,63 +333,103 @@ class MarketplaceScanner:
                 return True
 
         owner = self._users.get(listing.owner_id) if listing.owner_id is not None else None
-        stub_profile = await self.analyzer.get_profile(listing.owner_id, user=owner) if listing.owner_id else (
+        profile = await self.analyzer.get_profile(listing.owner_id, user=owner) if listing.owner_id else (
             await self.analyzer.get_profile(None, user=None)
         )
-        listing.owner_username = stub_profile.username
+        listing.owner_username = profile.username
+        listing.manual_gender = profile.manual_gender
+        listing.manual_nationality = profile.manual_nationality
 
-        profile_checks = [
-            check_blacklist(stub_profile, self.settings, listing),
-            check_whitelist(stub_profile, self.settings, listing),
-            check_language(stub_profile, self.settings),
-            check_nft_count(stub_profile, self.settings),
-            check_free_messages(stub_profile, self.settings),
-            check_account_level(stub_profile, self.settings),
-            check_manual_profile_tags(stub_profile, settings=self.settings),
+        black = check_blacklist(profile, self.settings, listing)
+        if not black.passed:
+            self._skip(listing, black.reason)
+            return True
+
+        profile_results = [
+            check_nft_count(profile, self.settings),
+            check_manual_profile_tags(profile, settings=self.settings),
+            check_language(profile, self.settings),
+            check_free_messages(profile, self.settings),
+            check_account_level(profile, self.settings),
         ]
-        for result in profile_checks:
-            if not result.passed:
-                self._skip(listing, result.reason)
-                return True
+        whitelist_hit = check_whitelist(profile, self.settings, listing)
+        if not whitelist_hit.passed:
+            self._skip(listing, whitelist_hit.reason)
+            return True
+        apply_profile = whitelist_hit.reason != "whitelist_ok"
+        if apply_profile:
+            for result in profile_results:
+                if not result.passed:
+                    self._skip(listing, result.reason)
+                    return True
 
-        final = should_publish(listing, stub_profile, self.settings)
+        await self.market.estimate(listing)
+        market = check_market_value(listing, self.settings)
+        if not market.passed:
+            self._skip(listing, market.reason)
+            return True
+
+        final = should_publish(listing, profile, self.settings, skip_market=True)
         if not final.passed:
             self._skip(listing, final.reason)
             return True
 
-        total, _, _ = calculate_score(listing, stub_profile, self.settings)
+        total, _, profile_score = calculate_score(listing, profile, self.settings)
         listing.score = total
-        self.db.update_listing(listing.listing_key, score=total, status=STATUS_QUEUED, owner_id=listing.owner_id)
-        await self._enqueue(listing, stub_profile)
+        listing.profile_score = profile_score
+        self.db.update_listing(
+            listing.listing_key,
+            score=total,
+            profile_score=profile_score,
+            status=STATUS_QUEUED,
+            owner_id=listing.owner_id,
+            seller_id=listing.seller_id or listing.owner_id,
+            market_value=listing.market_value,
+            floor_price=listing.floor_price,
+            price_ratio=listing.price_ratio,
+            discount_percent=listing.discount_percent,
+            market_confidence=listing.market_confidence,
+            market_sample_size=listing.market_sample_size,
+            manual_gender=listing.manual_gender,
+            manual_nationality=listing.manual_nationality,
+            owner_username=listing.owner_username,
+            price=listing.price,
+        )
+        self.state.stats.record_market(listing.price, listing.market_value, listing.discount_percent)
+        await self._enqueue(listing, profile)
         return True
 
     def _classify_signal(self, listing: Listing, existing: Optional[dict[str, Any]]) -> Optional[str]:
         if existing is None:
             return "new"
+        if existing.get("sent_at") or existing.get("status") == STATUS_SENT:
+            old_price = existing.get("price")
+            if listing.price is not None and old_price is not None and listing.price != old_price:
+                listing.old_price = old_price
+                self.db.record_price_change(listing.listing_key, old_price, listing.price)
+            return None
         old_price = existing.get("price")
         status = existing.get("status")
         if listing.price is not None and old_price is not None and listing.price != old_price:
             listing.old_price = old_price
             listing.is_price_change = True
             if status == STATUS_QUEUED:
+                self.db.record_price_change(listing.listing_key, old_price, listing.price)
                 return None
             return "price_change"
-        if status in {STATUS_QUEUED}:
+        if status in {STATUS_QUEUED, STATUS_EXISTING, STATUS_SKIPPED}:
+            if status == STATUS_SKIPPED:
+                reason = existing.get("skip_reason") or ""
+                if reason.startswith("price_") and listing.price is not None:
+                    if self.settings.min_price <= listing.price <= self.settings.max_price:
+                        return "price_change"
             return None
-        if status == STATUS_ERROR:
+        if status == STATUS_ERROR and not existing.get("is_initial_snapshot"):
             return "retry"
-        if existing.get("sent_at"):
-            return None
         if existing.get("last_notified_price") is not None and existing.get("last_notified_price") == listing.price:
             return None
-        if status == STATUS_SKIPPED:
-            reason = existing.get("skip_reason") or ""
-            if reason.startswith("price_") and listing.price is not None:
-                if self.settings.min_price <= listing.price <= self.settings.max_price:
-                    return "price_in_range"
-            return None
         if status == STATUS_NEW:
-            return "retry"
+            return None
         return None
 
     def _skip(self, listing: Listing, reason: str) -> None:
@@ -328,9 +437,23 @@ class MarketplaceScanner:
         stat = classify_filter_stat(reason)
         if stat:
             self.state.stats.inc(stat)
-        debug("FILTER", f"{listing.listing_key} skipped: {reason}")
+        debug(
+            "FILTER",
+            (
+                f"listing_key={listing.listing_key} gift_id={listing.gift_id} price={listing.price} "
+                f"market_value={listing.market_value} floor={listing.floor_price} ratio={listing.price_ratio} "
+                f"discount={listing.discount_percent} result={reason}"
+            ),
+        )
 
     async def _enqueue(self, listing: Listing, profile) -> None:
+        if self.state.scanner_paused:
+            log("QUEUE", f"Paused: not enqueueing {listing.listing_key}")
+            self.db.mark_status(listing.listing_key, STATUS_EXISTING, "paused")
+            return
+        if self.db.was_sent(listing.listing_key):
+            self.state.stats.inc("skip_duplicate")
+            return
         if self.state.queue.is_full():
             log("QUEUE", "Queue is full, listing skipped")
             self.db.mark_status(listing.listing_key, STATUS_NEW, "queue_full")
@@ -342,6 +465,10 @@ class MarketplaceScanner:
             log("QUEUE", "Queue is full, listing skipped")
             self.db.mark_status(listing.listing_key, STATUS_NEW, "queue_full")
             return
+        self.db.enqueue_listing(listing.listing_key, listing.gift_id, priority)
         self.state.stats.inc("queued")
-        debug("QUEUE", f"size={self.state.queue.qsize()} priority={priority}")
-        log("QUEUE", "Лот добавлен в очередь")
+        debug(
+            "QUEUE",
+            f"Added listing_key={listing.listing_key} gift_id={listing.gift_id} size={self.state.queue.qsize()} priority={priority}",
+        )
+        log("QUEUE", "Added")

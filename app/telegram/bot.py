@@ -75,21 +75,33 @@ def setup_bot(
     return bot, dp
 
 
-async def verify_target_channels(bot: Bot, settings: Settings) -> None:
-    if not settings.channel_ids:
-        raise RuntimeError("[ERROR] TARGET_CHANNEL_ID is not configured")
+async def verify_target_channels(bot: Bot, settings: Settings) -> tuple[int, ...]:
+    targets = settings.publish_targets()
+    if not targets:
+        message = (
+            "[ERROR] TARGET_CHANNEL_ID is missing or points to the bot/admin chat. "
+            "Marketplace listings must go to a real channel/supergroup id (usually -100...)."
+        )
+        log("ERROR", message)
+        return ()
     me = await bot.me()
     bot_id = int(me.id)
+    admin_id = settings.admin_user_id
     failures: list[str] = []
-    usable = 0
-    for chat_id in settings.channel_ids:
+    usable: list[int] = []
+    for chat_id in targets:
         if int(chat_id) == bot_id:
-            log("BOT", f"Target chat {chat_id} matches bot id @{settings.bot_username}; posting to this chat_id")
-            usable += 1
+            failures.append(f"{chat_id}: this is the bot's own id, not a channel")
+            continue
+        if admin_id is not None and int(chat_id) == int(admin_id):
+            failures.append(f"{chat_id}: ADMIN_USER_ID cannot be a marketplace target")
             continue
         try:
             chat = await bot.get_chat(chat_id)
             chat_type = getattr(chat, "type", None)
+            if chat_type in {ChatType.PRIVATE, "private"}:
+                failures.append(f"{chat_id}: private chats are not marketplace targets")
+                continue
             if chat_type in {ChatType.CHANNEL, ChatType.SUPERGROUP, "channel", "supergroup"}:
                 member = await bot.get_chat_member(chat_id, bot_id)
                 can_post = bool(getattr(member, "can_post_messages", False))
@@ -101,17 +113,18 @@ async def verify_target_channels(bot: Bot, settings: Settings) -> None:
                 if not can_post:
                     failures.append(f"{chat_id}: bot cannot post messages")
                     continue
-            usable += 1
-            log("BOT", f"Target chat ready: {chat_id} ({chat_type})")
+            usable.append(int(chat_id))
+            log("PUBLISHER", f"Target channel ready: {chat_id} ({chat_type})")
         except (TelegramForbiddenError, TelegramUnauthorizedError):
             failures.append(f"{chat_id}: bot cannot post messages")
         except Exception as error:
             failures.append(f"{chat_id}: {type(error).__name__}")
-    if usable <= 0:
+    if not usable:
         detail = "; ".join(failures) or "unknown reason"
-        raise RuntimeError(f"[ERROR] Bot cannot post messages to target channel ({detail})")
+        log("ERROR", f"Bot cannot post marketplace listings to TARGET_CHANNEL_ID ({detail})")
     for item in failures:
-        log("ERROR", f"Bot cannot post messages to target channel: {item}")
+        log("ERROR", f"Invalid marketplace target: {item}")
+    return tuple(usable)
 
 
 def _is_private(message: Message) -> bool:
@@ -150,7 +163,6 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 
 @router.message(Command("login"))
 async def cmd_login(message: Message, state: FSMContext, command: CommandObject) -> None:
-    await _register_operator_chat(message)
     if not await _ensure_login_allowed(message):
         return
     if await ctx.client.is_user_authorized():
@@ -255,29 +267,11 @@ async def login_password_received(message: Message, state: FSMContext) -> None:
     await message.answer("Вход выполнен. Scanner запущен.")
 
 
-async def _register_operator_chat(message: Message) -> None:
-    if not _is_private(message) or not _is_operator(message):
-        return
-    chat_id = getattr(message.chat, "id", None)
-    if chat_id is None:
-        return
-    bot_id = None
-    token = ctx.settings.bot_token or ""
-    prefix = token.split(":", 1)[0]
-    if prefix.isdigit():
-        bot_id = int(prefix)
-    if bot_id is not None and int(chat_id) == bot_id:
-        return
-    ctx.db.add_notify_chat(int(chat_id))
-    log("BOT", "Operator chat registered for listing delivery")
-
-
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
-    await _register_operator_chat(message)
     username = ctx.settings.bot_username.lstrip("@")
     authorized = ctx.state.user_authorized
-    targets = ctx.db.get_notify_chats()
+    targets = ctx.settings.publish_targets()
     login_hint = (
         "User-сессия уже активна."
         if authorized
@@ -292,8 +286,10 @@ async def cmd_start(message: Message) -> None:
     await message.answer(
         "Marketplace Tracker запущен.\n"
         f"Бот: @{username}\n"
-        f"Лоты будут приходить сюда, в этот чат.\n"
-        f"Получатели: {', '.join(str(item) for item in targets) or 'этот чат'}\n"
+        "Этот чат — только команды и ошибки.\n"
+        "Лоты Marketplace публикуются только в TARGET_CHANNEL_ID, не сюда.\n"
+        f"Target channels: {', '.join(str(item) for item in targets) or 'не заданы'}\n"
+        f"Scanner mode: {ctx.state.scanner_mode}\n"
         "Пауза между лотами: 4 секунды.\n\n"
         f"{login_hint}"
     )
@@ -301,8 +297,14 @@ async def cmd_start(message: Message) -> None:
 
 @router.message(Command("pause"))
 async def cmd_pause(message: Message) -> None:
-    ctx.state.pause()
-    await message.answer("Scanner: PAUSED\nPublisher дошлёт очередь и будет ждать.")
+    items = ctx.state.pause()
+    for item in items:
+        ctx.db.cancel_queue(item.listing.listing_key, "pause_drained")
+    await message.answer(
+        "Scanner: PAUSED\n"
+        "Сканер может обновлять БД, но в publisher ничего не отправится.\n"
+        f"Очередь сброшена: {len(items)} лотов. После /resume они не публикуются как новые."
+    )
 
 
 @router.message(Command("resume"))
@@ -313,19 +315,21 @@ async def cmd_resume(message: Message) -> None:
 
 @router.message(Command("status"))
 async def cmd_status(message: Message) -> None:
-    await _register_operator_chat(message)
     stats = ctx.state.stats
-    targets = ctx.db.get_notify_chats()
+    targets = ctx.settings.publish_targets()
     text = (
         f"Scanner: {ctx.state.scanner_status()}\n"
         f"Publisher: {ctx.state.publisher_status()}\n"
+        f"Mode: {ctx.state.scanner_mode}\n"
         f"User session: {'AUTHORIZED' if ctx.state.user_authorized else 'WAITING_LOGIN'}\n"
-        f"Deliver to: {', '.join(str(item) for item in targets) or '-'}\n"
+        f"TARGET_CHANNEL_ID: {', '.join(str(item) for item in targets) or '-'}\n"
         f"Queue: {ctx.state.queue.qsize()}\n"
         f"Last scan: {stats.last_scan or '-'}\n"
         f"Last publish: {stats.last_publish or '-'}\n"
         f"Scanned: {stats.get('total_scanned')}\n"
+        f"Existing: {stats.get('existing')}\n"
         f"New: {stats.get('new_listings')}\n"
+        f"Queued: {stats.get('queued')}\n"
         f"Filtered: {stats.get('filtered')}\n"
         f"Sent: {stats.get('sent')}\n"
         f"Errors: {stats.get('errors')}"
@@ -338,23 +342,27 @@ async def cmd_stats(message: Message) -> None:
     snap = ctx.state.stats.snapshot()
     lines = ["Статистика текущего запуска:", ""]
     order = [
-        "total_scanned",
-        "new_listings",
-        "duplicates",
-        "price_filtered",
-        "rarity_filtered",
-        "number_filtered",
-        "blacklist_filtered",
-        "whitelist_filtered",
-        "language_filtered",
-        "nft_filtered",
-        "free_message_filtered",
-        "account_level_filtered",
-        "manual_tag_filtered",
+        "scanned",
+        "existing",
+        "new",
         "queued",
         "sent",
-        "send_errors",
-        "price_changes",
+        "skipped",
+        "errors",
+        "skip_price",
+        "skip_market",
+        "skip_nft",
+        "skip_gender",
+        "skip_language",
+        "skip_free_messages",
+        "skip_account_level",
+        "skip_blacklist",
+        "skip_duplicate",
+        "average_market_value",
+        "average_listing_price",
+        "average_discount",
+        "market_rejected_count",
+        "published_count",
         "floodwaits",
         "average_scan_time",
         "average_publish_time",

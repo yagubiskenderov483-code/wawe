@@ -50,15 +50,19 @@ def detect_text_language(text: str | None) -> tuple[str, float]:
 
 
 def interpret_free_messages(user: Any, full: Any) -> Optional[bool]:
+    found = False
     value = None
     for obj in (full, user):
         if obj is None:
             continue
         if hasattr(obj, "send_paid_messages_stars"):
+            found = True
             raw = getattr(obj, "send_paid_messages_stars")
             if raw is not None:
                 value = raw
                 break
+    if not found:
+        return None
     if value is None:
         return True
     try:
@@ -67,7 +71,7 @@ def interpret_free_messages(user: Any, full: Any) -> Optional[bool]:
         return None
     if amount > 0:
         return False
-    return None
+    return True
 
 
 def extract_account_level(full: Any) -> Optional[int]:

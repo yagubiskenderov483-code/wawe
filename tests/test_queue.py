@@ -71,10 +71,10 @@ class ChannelAndMessageTests(unittest.TestCase):
         cfg = settings(target_channel_id=-1001, target_channels=(-1002, -1001, -1003))
         self.assertEqual(cfg.channel_ids, (-1001, -1002, -1003))
 
-    def test_publish_skips_bot_id(self):
+    def test_publish_skips_bot_and_admin(self):
         bot_id = 8825465611
-        targets = resolve_publish_chat_ids((bot_id,), (555001,), bot_id)
-        self.assertEqual(targets, (555001,))
+        targets = resolve_publish_chat_ids((bot_id, -100123), (555001,), bot_id, admin_id=555001)
+        self.assertEqual(targets, (-100123,))
         self.assertEqual(resolve_publish_chat_ids((bot_id,), (), bot_id), ())
 
     def test_missing_fields_message(self):

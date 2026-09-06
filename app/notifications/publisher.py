@@ -109,6 +109,12 @@ def format_listing_message(listing: Listing, profile: Profile) -> str:
     if any(_clean(value) for value in (listing.model, listing.symbol, listing.backdrop)):
         lines.append("")
     lines.append(_owner_line(profile, listing))
+    nft_url = listing.nft_url
+    if nft_url:
+        lines.append(f"🔗 Лот: {nft_url}")
+    seller_url = owner_profile_url(profile, listing)
+    if seller_url:
+        lines.append(f"✉️ Написать: {seller_url}")
     lines.append("")
     if _clean(profile.language) and profile.language != "unknown":
         lines.append(f"🌐 Язык профиля: {profile.language}")

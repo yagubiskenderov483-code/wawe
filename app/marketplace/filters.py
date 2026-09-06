@@ -4,7 +4,7 @@ from typing import Iterable, Optional
 
 from app.config import Settings
 from app.marketplace.models import FilterResult, Listing, Profile
-from app.profile.gender import infer_gender
+from app.profile.gender import infer_gender, is_known_female_name
 from app.utils.logger import debug, log
 
 
@@ -235,6 +235,13 @@ def check_manual_profile_tags(
         if gender and gender != gender_filter:
             log("FILTER", f"Manual gender: {gender} -> SKIP")
             return _fail("manual_gender_mismatch")
+        if gender_filter == "female" and settings.strict_female_name:
+            # Hard rule: an explicit /tag or a recognised female first name.
+            # A feminine surname or an -а/-я ending is not enough.
+            manual_value = _norm(prefs.get("manual_gender", profile.manual_gender))
+            if manual_value != "female" and not is_known_female_name(profile.first_name):
+                log("FILTER", "Female first name required -> SKIP")
+                return _fail("manual_gender_missing")
         if not gender:
             if settings.strict_gender:
                 log("FILTER", "Manual gender: unmarked -> SKIP (strict)")
@@ -430,6 +437,7 @@ def classify_filter_stat(reason: str) -> str | None:
         "account_level_unavailable": "skip_account_level",
         "manual_gender_mismatch": "skip_gender",
         "manual_gender_missing": "skip_gender",
+        "female_name_required": "skip_gender",
         "manual_nationality_mismatch": "manual_tag_filtered",
         "manual_tag_ignore": "manual_tag_filtered",
         "profile_score_too_low": "profile_filtered",

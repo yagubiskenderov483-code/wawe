@@ -433,8 +433,10 @@ class MarketplaceScanner:
                 return True
 
         owner = self._users.get(listing.owner_id) if listing.owner_id is not None else None
-        profile = await self.analyzer.get_profile(listing.owner_id, user=owner) if listing.owner_id else (
-            await self.analyzer.get_profile(None, user=None)
+        # The gift count costs a paginated API call per owner, so it is not
+        # fetched until the free checks below have passed.
+        profile = await self.analyzer.get_profile(listing.owner_id, user=owner, with_nft=False) if listing.owner_id else (
+            await self.analyzer.get_profile(None, user=None, with_nft=False)
         )
         listing.owner_username = profile.username
         listing.manual_gender = profile.manual_gender
@@ -445,23 +447,29 @@ class MarketplaceScanner:
             self._skip(listing, black.reason)
             return True
 
-        profile_results = [
-            check_nft_count(profile, self.settings),
-            check_manual_profile_tags(profile, settings=self.settings),
-            check_language(profile, self.settings),
-            check_free_messages(profile, self.settings),
-            check_account_level(profile, self.settings),
-        ]
         whitelist_hit = check_whitelist(profile, self.settings, listing)
         if not whitelist_hit.passed:
             self._skip(listing, whitelist_hit.reason)
             return True
         apply_profile = whitelist_hit.reason != "whitelist_ok"
         if apply_profile:
-            for result in profile_results:
+            # Cheapest first: these need no network call at all.
+            for check in (
+                lambda: check_manual_profile_tags(profile, settings=self.settings),
+                lambda: check_language(profile, self.settings),
+                lambda: check_free_messages(profile, self.settings),
+                lambda: check_account_level(profile, self.settings),
+            ):
+                result = check()
                 if not result.passed:
                     self._skip(listing, result.reason)
                     return True
+
+            await self.analyzer.ensure_nft_count(profile, user=owner)
+            nft = check_nft_count(profile, self.settings)
+            if not nft.passed:
+                self._skip(listing, nft.reason)
+                return True
 
         await self.market.estimate(listing)
         market = check_market_value(listing, self.settings)

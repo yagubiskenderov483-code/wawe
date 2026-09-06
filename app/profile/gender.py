@@ -374,6 +374,16 @@ def infer_gender(
     return None
 
 
+def is_known_female_name(first_name: str | None) -> bool:
+    """True only for a first name that is in the known female list.
+
+    The strictest signal available: a feminine surname or an -а/-я ending is
+    not enough, the display name itself must be a recognised female name.
+    """
+    tokens = _name_tokens(first_name)
+    return bool(tokens) and tokens[0] in _FEMALE_NAMES
+
+
 def _gender_from_last_name(tokens: list[str]) -> str | None:
     for token in tokens:
         if token.endswith(("ова", "ева", "ина", "ская", "цкая", "ая", "ova", "eva", "ina", "skaya")):

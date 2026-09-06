@@ -503,6 +503,41 @@ class CollectionFloorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await scanner._load_gift_ids(), [])
 
 
+class LazyProfileCostTests(unittest.IsolatedAsyncioTestCase):
+    """The gift count is an API call per owner: it must run last, not first."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Database(str(Path(self.tmp.name) / "tracker.db"))
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp.cleanup()
+
+    def _female_scanner(self):
+        scanner = _scanner(self.db, publish_existing=True)
+        scanner.settings = settings(manual_gender_filter="female", publish_existing=True)
+        return scanner
+
+    async def test_nft_count_not_fetched_when_gender_fails(self):
+        scanner = self._female_scanner()
+        scanner.analyzer.get_profile.return_value = passing_profile(
+            manual_gender=None, first_name="Витя", last_name=None, nft_count=None
+        )
+        await scanner._process_gift(StarGiftUnique(42, price=12000, owner_id=999))
+        scanner.analyzer.ensure_nft_count.assert_not_awaited()
+        self.assertEqual(self.db.get_listing("gift:42")["status"], STATUS_SKIPPED)
+
+    async def test_nft_count_fetched_once_the_free_checks_pass(self):
+        scanner = self._female_scanner()
+        scanner.analyzer.get_profile.return_value = passing_profile(
+            manual_gender=None, first_name="Настя", last_name=None, language="ru", nft_count=2
+        )
+        await scanner._process_gift(StarGiftUnique(43, price=12000, owner_id=998))
+        scanner.analyzer.ensure_nft_count.assert_awaited()
+        self.assertEqual(self.db.get_listing("gift:43")["status"], STATUS_QUEUED)
+
+
 class StatusHelpersTests(unittest.TestCase):
     def test_new_status_constant(self):
         self.assertEqual(STATUS_NEW, "NEW")

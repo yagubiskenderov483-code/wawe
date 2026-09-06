@@ -102,11 +102,26 @@ class ProfileAnalyzer:
         self.limiter = limiter
         self.stats = stats
 
+    async def ensure_nft_count(self, profile: Profile, user: Any = None) -> Profile:
+        """Fill in the gift count for a profile fetched with with_nft=False.
+
+        Counting unique gifts costs a paginated API call per owner, so the
+        scanner defers it until the free checks (gender, language, level)
+        have already passed.
+        """
+        if profile.user_id is None or profile.nft_count is not None:
+            return profile
+        profile.nft_count = await self._count_unique_gifts(profile.user_id, user)
+        profile.updated_at = utc_now_iso()
+        self.db.upsert_profile(profile)
+        return profile
+
     async def get_profile(
         self,
         user_id: Optional[int],
         user: Any = None,
         force_refresh: bool = False,
+        with_nft: bool = True,
     ) -> Profile:
         profile = Profile(user_id=user_id)
         if user_id is not None and not force_refresh and self.db.is_profile_fresh(user_id, self.settings.profile_cache_ttl):
@@ -154,14 +169,13 @@ class ProfileAnalyzer:
         profile.language_score = score
 
         if profile.user_id is not None:
-            profile.nft_count = await self._count_unique_gifts(profile.user_id, entity)
+            if with_nft:
+                profile.nft_count = await self._count_unique_gifts(profile.user_id, entity)
             prefs = self.db.get_manual_profile_preferences(profile.user_id)
-            profile.manual_gender = infer_gender(
-                profile.first_name,
-                prefs.get("manual_gender"),
-                last_name=profile.last_name,
-                suffix_guess=self.settings.gender_suffix_guess,
-            )
+            # Keep the operator's /tag value raw: filters infer from the name
+            # themselves, and a strict filter must be able to tell an explicit
+            # tag apart from a guess.
+            profile.manual_gender = prefs.get("manual_gender")
             profile.manual_nationality = prefs.get("manual_nationality")
             profile.manual_tag = prefs.get("manual_tag")
             profile.updated_at = utc_now_iso()

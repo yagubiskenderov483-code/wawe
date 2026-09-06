@@ -122,6 +122,7 @@ class Settings:
     manual_gender_filter: str = "female"
     strict_gender: bool = True
     gender_suffix_guess: bool = False
+    strict_female_name: bool = True
     manual_nationality_filter: str = ""
     max_queue_size: int = 100
     profile_cache_ttl: int = 300
@@ -274,6 +275,7 @@ def load_settings() -> Settings:
         manual_gender_filter=_env("MANUAL_GENDER_FILTER", "female") or "female",
         strict_gender=_env_bool("STRICT_GENDER", True),
         gender_suffix_guess=_env_bool("GENDER_SUFFIX_GUESS", False),
+        strict_female_name=_env_bool("STRICT_FEMALE_NAME", True),
         manual_nationality_filter=_env("MANUAL_NATIONALITY_FILTER"),
         max_queue_size=_env_int("MAX_QUEUE_SIZE", 100),
         profile_cache_ttl=_env_int("PROFILE_CACHE_TTL", 300),

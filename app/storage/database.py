@@ -219,8 +219,11 @@ def market_cache_key(
 
 
 class Database:
+    IN_MEMORY = ":memory:"
+
     def __init__(self, path: str) -> None:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        if path != self.IN_MEMORY:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row

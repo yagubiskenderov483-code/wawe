@@ -152,7 +152,8 @@ class Settings:
     max_same_gift_streak: int = 3
     unique_owners: bool = True
     max_new_per_gift_scan: int = 0
-    publish_existing: bool = True
+    publish_existing: bool = False
+    memory_only: bool = True
     collection_floor_filter: bool = True
     collection_floor_min: int = 5000
     collection_floor_max: int = 25000
@@ -250,6 +251,13 @@ def load_settings() -> Settings:
     bot_username = _env("BOT_USERNAME", DEFAULT_BOT_USERNAME).lstrip("@") or DEFAULT_BOT_USERNAME
     target_channels = _csv_channel_ids("TARGET_CHANNELS")
 
+    memory_only = _env_bool("MEMORY_ONLY", True)
+    publish_existing = _env_bool("PUBLISH_EXISTING", False)
+    if memory_only and publish_existing:
+        # Nothing is remembered between runs, so republishing existing stock
+        # would resend the whole market after every restart.
+        publish_existing = False
+
     min_price = _env_int("MIN_PRICE", 5000)
     max_price = _env_int("MAX_PRICE", 25000)
 
@@ -300,7 +308,9 @@ def load_settings() -> Settings:
         max_pages_per_gift=_env_int("MAX_PAGES_PER_GIFT", 5),
         max_snapshot_pages_per_gift=_env_int("MAX_SNAPSHOT_PAGES_PER_GIFT", 1),
         max_new_per_gift_scan=_env_int("MAX_NEW_PER_GIFT_SCAN", 0),
-        publish_existing=_env_bool("PUBLISH_EXISTING", True),
+        publish_existing=publish_existing,
+        memory_only=memory_only,
+        db_path=":memory:" if memory_only else str(DB_PATH),
         collection_floor_filter=_env_bool("COLLECTION_FLOOR_FILTER", True),
         collection_floor_min=_env_int("COLLECTION_FLOOR_MIN", min_price),
         collection_floor_max=_env_int("COLLECTION_FLOOR_MAX", max_price),

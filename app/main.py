@@ -38,8 +38,14 @@ async def backup_loop(state: AppState, db: Database, backup_dir: str, interval: 
 async def run_tracker() -> None:
     settings = load_settings()
     setup_logging(settings.debug)
-    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
-    Path(settings.backup_dir).mkdir(parents=True, exist_ok=True)
+    if settings.memory_only:
+        # No files on disk: the tracker remembers the market only for the
+        # lifetime of the process, so every restart starts from a clean slate
+        # and can never republish yesterday's lots.
+        log("DB", "MEMORY_ONLY=true: in-memory database, nothing is written to disk")
+    else:
+        Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+        Path(settings.backup_dir).mkdir(parents=True, exist_ok=True)
 
     db = Database(settings.db_path)
     state = AppState(settings.max_queue_size)
@@ -112,12 +118,13 @@ async def run_tracker() -> None:
             log("AUTH", "Bot is up. Open @%s and send /login" % settings.bot_username)
 
         tasks.append(asyncio.create_task(dp.start_polling(bot), name="bot"))
-        tasks.append(
-            asyncio.create_task(
-                backup_loop(state, db, settings.backup_dir, settings.db_backup_interval),
-                name="backup",
+        if not settings.memory_only:
+            tasks.append(
+                asyncio.create_task(
+                    backup_loop(state, db, settings.backup_dir, settings.db_backup_interval),
+                    name="backup",
+                )
             )
-        )
         log("MAIN", "Tracker is running. Press Ctrl+C to stop.")
         await stop_event.wait()
     except BotUnauthorizedError as error:

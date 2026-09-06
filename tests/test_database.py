@@ -136,5 +136,40 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(scanner._classify_signal(listing, existing), "retry")
 
 
+class MemoryOnlyTests(unittest.TestCase):
+    """MEMORY_ONLY: no files on disk, nothing survives a restart."""
+
+    def test_in_memory_database_works_without_files(self):
+        db = Database(Database.IN_MEMORY)
+        try:
+            self.assertIsNone(db.get_scanner_mode())
+            db.set_scanner_mode("LIVE")
+            self.assertEqual(db.get_scanner_mode(), "LIVE")
+        finally:
+            db.close()
+
+    def test_memory_only_forces_fresh_lots_mode(self):
+        import os
+        from unittest.mock import patch
+        from app.config import load_settings
+
+        env = {"MEMORY_ONLY": "true", "PUBLISH_EXISTING": "true"}
+        with patch.dict(os.environ, env):
+            settings = load_settings()
+        self.assertTrue(settings.memory_only)
+        self.assertFalse(settings.publish_existing)
+        self.assertEqual(settings.db_path, ":memory:")
+
+    def test_disk_mode_keeps_the_file_path(self):
+        import os
+        from unittest.mock import patch
+        from app.config import load_settings
+
+        with patch.dict(os.environ, {"MEMORY_ONLY": "false"}):
+            settings = load_settings()
+        self.assertFalse(settings.memory_only)
+        self.assertTrue(settings.db_path.endswith("tracker.db"))
+
+
 if __name__ == "__main__":
     unittest.main()

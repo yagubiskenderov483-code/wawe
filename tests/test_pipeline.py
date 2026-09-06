@@ -176,6 +176,24 @@ class SnapshotAndRestartTests(unittest.IsolatedAsyncioTestCase):
         await scanner._process_gift(StarGiftUnique(41, price=13000, owner_id=222))
         self.assertEqual(scanner.state.queue.qsize(), 2)
 
+    async def test_live_scan_publishes_only_leading_new_listing(self):
+        scanner = _scanner(self.db)
+        await scanner._process_gift(StarGiftUnique(1))
+        scanner._finish_snapshot()
+
+        class Page:
+            gifts = [StarGiftUnique(100, price=12000), StarGiftUnique(1), StarGiftUnique(200, price=13000)]
+            users = []
+            next_offset = ""
+
+        scanner._fetch_resale_page = AsyncMock(return_value=Page())
+        await scanner._scan_gift(10, snapshot=False)
+        self.assertEqual(self.db.get_listing("gift:100")["status"], STATUS_QUEUED)
+        self.assertEqual(self.db.get_listing("gift:1")["status"], STATUS_EXISTING)
+        trailing = self.db.get_listing("gift:200")
+        self.assertEqual(trailing["status"], STATUS_EXISTING)
+        self.assertEqual(scanner.state.queue.qsize(), 1)
+
     async def test_unique_owners_can_be_disabled(self):
         scanner = _scanner(self.db)
         scanner.settings = settings(

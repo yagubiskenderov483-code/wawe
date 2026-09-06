@@ -223,18 +223,36 @@ class MarketplaceScanner:
             found += len(gifts)
             self.state.stats.inc("scanned", len(gifts))
             self.state.stats.inc("total_scanned", len(gifts))
+            page_new = 0
+            hit_known = False
             for gift in gifts:
-                is_new_signal = await self._process_gift(gift)
-                if is_new_signal is False:
+                if snapshot:
+                    is_new_signal = await self._process_gift(gift)
+                    if is_new_signal is False:
+                        known_streak += 1
+                    else:
+                        known_streak = 0
+                    continue
+                listing = parse_listing(gift)
+                if listing is None:
+                    continue
+                existing = self.db.get_listing(listing.listing_key)
+                if existing is not None:
+                    hit_known = True
                     known_streak += 1
-                else:
-                    known_streak = 0
+                    continue
+                if hit_known or page_new >= self.settings.max_new_per_gift_scan:
+                    self._remember_existing(listing)
+                    continue
+                await self._process_gift(gift)
+                page_new += 1
+                known_streak = 0
             next_offset = getattr(result, "next_offset", None) or ""
             self.db.set_scanner_offset(gift_id, next_offset)
             pages += 1
             if not next_offset:
                 break
-            if not snapshot and known_streak >= 1:
+            if not snapshot and (hit_known or known_streak >= 1):
                 debug("SCANNER", f"Stopping pagination for gift_id={gift_id}: reached known listings")
                 break
             offset = next_offset
@@ -294,17 +312,20 @@ class MarketplaceScanner:
             log("SNAPSHOT", f"Existing listing -> SKIP {listing.listing_key}")
             self.state.stats.inc("existing")
             return False
+        return self._remember_existing(listing, reason="initial_snapshot")
+
+    def _remember_existing(self, listing: Listing, reason: str = "already_on_market") -> bool:
         listing.is_new = False
         listing.is_initial_snapshot = True
         listing.status = STATUS_EXISTING
-        listing.skip_reason = "initial_snapshot"
+        listing.skip_reason = reason
         inserted = self.db.insert_listing(listing)
         if not inserted:
             self.state.stats.inc("duplicates")
             return False
         self.db.mark_existing(listing.listing_key)
         self.state.stats.inc("existing")
-        log("SNAPSHOT", f"Existing listing -> SKIP {listing.listing_key}")
+        log("SNAPSHOT" if reason == "initial_snapshot" else "LIVE", f"Existing listing -> SKIP {listing.listing_key}")
         return False
 
     async def _filter_and_maybe_queue(self, listing: Listing) -> bool:

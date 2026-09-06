@@ -32,7 +32,37 @@ _MALE_A_NAMES = {
     "дима",
     "коля",
     "паша",
-    "саша",
+    "рома",
+    "гена",
+    "толя",
+    "юра",
+    "костя",
+    "степа",
+    "стёпа",
+    "лёша",
+    "леша",
+    "серёжа",
+    "сережа",
+    "nikita",
+    "ilya",
+    "ilja",
+    "sava",
+    "luka",
+    "misha",
+    "vanya",
+    "vova",
+    "dima",
+    "kolya",
+    "pasha",
+    "roma",
+    "gena",
+    "tolya",
+    "yura",
+    "kostya",
+    "styopa",
+    "lesha",
+    "lyosha",
+    "seryozha",
 }
 _UNISEX_NAMES = {"саша", "женя", "валя", "слава", "sasha", "zhenya"}
 _FEMALE_NAMES = {
@@ -269,7 +299,7 @@ def infer_gender(
         return "female"
     if name in _MALE_A_NAMES:
         return "male"
-    if name.endswith(("а", "я", "ия", "a", "ia", "ya")):
+    if _CYRILLIC_RE.search(name) and name.endswith(("а", "я", "ия")):
         return "female"
     last_guess = _gender_from_last_name(_name_tokens(last_name))
     if last_guess:

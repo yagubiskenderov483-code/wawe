@@ -11,6 +11,7 @@ from telethon.tl.types import InputPeerUser, InputUser, StarGiftUnique, User, Us
 
 from app.config import Settings
 from app.marketplace.models import Profile, utc_now_iso
+from app.profile.gender import infer_gender
 from app.storage.database import Database
 from app.utils.logger import debug, log
 from app.utils.rate_limit import ApiLimiter, invoke_telegram
@@ -18,88 +19,6 @@ from app.utils.stats import RuntimeStats
 
 CYRILLIC_RE = re.compile(r"[А-Яа-яЁёІіЇїЄєҐґ]")
 LATIN_RE = re.compile(r"[A-Za-z]")
-
-
-_MALE_A_NAMES = {
-    "никита",
-    "илья",
-    "илия",
-    "савва",
-    "фома",
-    "кузьма",
-    "данила",
-    "лука",
-    "лёва",
-    "лева",
-    "миша",
-    "ваня",
-}
-_UNISEX_NAMES = {"саша", "женя", "валя", "слава", "женя"}
-_FEMALE_LATIN = {
-    "anna",
-    "maria",
-    "marie",
-    "elena",
-    "olga",
-    "irina",
-    "natalia",
-    "natalie",
-    "ekaterina",
-    "kate",
-    "katya",
-    "daria",
-    "darya",
-    "alina",
-    "alisa",
-    "alice",
-    "victoria",
-    "viktoria",
-    "sofia",
-    "sophia",
-    "anastasia",
-    "yulia",
-    "julia",
-    "polina",
-    "ksenia",
-    "oksana",
-    "tatiana",
-    "tatyana",
-    "marina",
-    "svetlana",
-    "ludmila",
-    "lyudmila",
-    "galina",
-    "nina",
-    "vera",
-    "nadezhda",
-    "lyubov",
-    "karina",
-    "arina",
-    "milana",
-    "varvara",
-    "evgenia",
-    "elizaveta",
-}
-
-
-def infer_gender(first_name: str | None, manual: str | None = None) -> str | None:
-    if manual:
-        value = manual.strip().lower()
-        if value:
-            return value
-    raw = (first_name or "").strip()
-    if not raw:
-        return None
-    name = raw.split()[0].casefold()
-    if name in _UNISEX_NAMES:
-        return None
-    if name in _FEMALE_LATIN:
-        return "female"
-    if name in _MALE_A_NAMES:
-        return "male"
-    if name.endswith(("а", "я", "ия", "a", "ia", "ya")):
-        return "female"
-    return None
 
 
 def detect_profile_language(profile: Profile | dict | str | None) -> tuple[str, float]:

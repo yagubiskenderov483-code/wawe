@@ -36,6 +36,17 @@ class AuthErrorTests(unittest.TestCase):
         self.assertIn("Код", describe_auth_error(PhoneCodeInvalidError(None)))
 
 
+class ImportCycleTests(unittest.TestCase):
+    def test_scanner_import_does_not_cycle(self):
+        from app.marketplace.scanner import MarketplaceScanner
+        from app.marketplace.filters import check_manual_profile_tags
+        from app.profile.gender import infer_gender
+
+        self.assertTrue(callable(MarketplaceScanner))
+        self.assertTrue(callable(check_manual_profile_tags))
+        self.assertEqual(infer_gender("Анна"), "female")
+
+
 class NoTerminalLoginTests(unittest.TestCase):
     def test_connect_helper_exists(self):
         self.assertTrue(hasattr(user_client, "connect_user_client"))

@@ -4,7 +4,7 @@ from typing import Iterable, Optional
 
 from app.config import Settings
 from app.marketplace.models import FilterResult, Listing, Profile
-from app.profile.analyzer import infer_gender
+from app.profile.gender import infer_gender
 from app.utils.logger import debug, log
 
 

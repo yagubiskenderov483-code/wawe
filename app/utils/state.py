@@ -176,6 +176,9 @@ class AppState:
         self.same_gift_streak = 0
         self.last_published_owner_id: int | None = None
         self.last_published_model: str | None = None
+        self.catalog_primary = 0
+        self.catalog_secondary = 0
+        self.catalog_skipped = 0
 
     def pause(self) -> list[QueueItem]:
         self.scanner_paused = True

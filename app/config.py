@@ -135,7 +135,7 @@ class Settings:
     session_path: str = str(SESSION_PATH)
     db_path: str = str(DB_PATH)
     backup_dir: str = str(BACKUP_DIR)
-    max_pages_per_gift: int = 1
+    max_pages_per_gift: int = 6
     max_snapshot_pages_per_gift: int = 1
     resale_page_limit: int = 50
     max_api_backoff: int = 32
@@ -146,7 +146,8 @@ class Settings:
     diversify_gifts: bool = True
     max_same_gift_streak: int = 1
     unique_owners: bool = True
-    max_new_per_gift_scan: int = 1
+    max_new_per_gift_scan: int = 8
+    secondary_gift_types_per_scan: int = 20
 
     @property
     def bot_user_id(self) -> int | None:
@@ -282,9 +283,10 @@ def load_settings() -> Settings:
         diversify_gifts=_env_bool("DIVERSIFY_GIFTS", True),
         max_same_gift_streak=_env_int("MAX_SAME_GIFT_STREAK", 1),
         unique_owners=_env_bool("UNIQUE_OWNERS", True),
-        max_pages_per_gift=_env_int("MAX_PAGES_PER_GIFT", 1),
+        max_pages_per_gift=_env_int("MAX_PAGES_PER_GIFT", 6),
         max_snapshot_pages_per_gift=_env_int("MAX_SNAPSHOT_PAGES_PER_GIFT", 1),
-        max_new_per_gift_scan=_env_int("MAX_NEW_PER_GIFT_SCAN", 1),
+        max_new_per_gift_scan=_env_int("MAX_NEW_PER_GIFT_SCAN", 8),
+        secondary_gift_types_per_scan=_env_int("SECONDARY_GIFT_TYPES_PER_SCAN", 20),
     )
     return settings
 

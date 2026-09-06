@@ -154,7 +154,15 @@ class ProfileAnalyzer:
         profile.language_score = score
 
         if profile.user_id is not None:
-            profile.nft_count = await self._count_unique_gifts(profile.user_id, entity)
+            gifts_count = getattr(full, "stargifts_count", None) if full is not None else None
+            try:
+                gifts_total = int(gifts_count) if gifts_count is not None else None
+            except (TypeError, ValueError):
+                gifts_total = None
+            if gifts_total is not None and gifts_total <= self.settings.max_nft_count:
+                profile.nft_count = gifts_total
+            else:
+                profile.nft_count = await self._count_unique_gifts(profile.user_id, entity)
             prefs = self.db.get_manual_profile_preferences(profile.user_id)
             profile.manual_gender = infer_gender(
                 profile.first_name,

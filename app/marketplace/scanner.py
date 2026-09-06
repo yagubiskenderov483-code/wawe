@@ -11,6 +11,9 @@ from telethon.tl.types.payments import StarGifts, StarGiftsNotModified
 
 from app.config import Settings
 from app.marketplace.filters import (
+    RANK_PRIMARY,
+    RANK_SECONDARY,
+    RANK_SKIP,
     calculate_priority,
     calculate_score,
     check_account_level,
@@ -27,6 +30,7 @@ from app.marketplace.filters import (
     check_price,
     check_symbol,
     check_whitelist,
+    classify_collection,
     classify_filter_stat,
     should_publish,
 )
@@ -41,16 +45,32 @@ from app.marketplace.models import (
     STATUS_SENT,
     STATUS_SKIPPED,
     Listing,
+    Profile,
     QueueItem,
     utc_now_iso,
 )
 from app.marketplace.parser import parse_listing
 from app.notifications.alerts import AlertManager
-from app.profile.analyzer import ProfileAnalyzer
+from app.profile.analyzer import ProfileAnalyzer, detect_profile_language
+from app.profile.gender import infer_gender
 from app.storage.database import Database
 from app.utils.logger import debug, log, redact_secrets
 from app.utils.rate_limit import ApiLimiter, SessionInvalidError, invoke_telegram, next_backoff, sleep_seconds
 from app.utils.state import AppState
+
+
+def _norm_text(value: Optional[str]) -> str:
+    return (value or "").strip().lower()
+
+
+def _as_optional_int(value: Any) -> int | None:
+    if value is None or value is False:
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 class MarketplaceScanner:
@@ -74,8 +94,10 @@ class MarketplaceScanner:
         self.alerts = alerts
         self.market = market or MarketEstimator(settings, db, client, limiter, state.stats)
         self._gift_ids: list[int] = []
+        self._gift_catalog: list[tuple[int, int | None]] = []
         self._gift_hash = 0
         self._users: dict[int, User] = {}
+        self._secondary_cursor = 0
         self._restore_mode()
 
     def _restore_mode(self) -> None:
@@ -125,18 +147,35 @@ class MarketplaceScanner:
 
     async def scan_once(self) -> None:
         self.state.stats.last_scan = utc_now_iso()
-        gift_ids = await self._load_gift_ids()
-        debug("SCANNER", f"Gift types for resale: {len(gift_ids)}")
-        total = 0
+        catalog = await self._load_catalog()
         snapshot = self.is_snapshot()
+        primary, secondary, skipped = self._partition_catalog(catalog)
+        self.state.catalog_primary = len(primary)
+        self.state.catalog_secondary = len(secondary)
+        self.state.catalog_skipped = len(skipped)
         if snapshot:
-            log("SNAPSHOT", f"Remembering current market ({len(gift_ids)} gift types). Nothing is published yet.")
-        for index, gift_id in enumerate(gift_ids, start=1):
+            to_scan = [gift_id for gift_id, _min in primary + secondary]
+            log(
+                "SNAPSHOT",
+                f"Remembering current market ({len(to_scan)} gift types, skip={len(skipped)} out of band). "
+                "Nothing is published yet.",
+            )
+        else:
+            watched = self._rotate_secondary([gift_id for gift_id, _min in secondary], self.settings.secondary_gift_types_per_scan)
+            to_scan = [gift_id for gift_id, _min in primary] + watched
+            log(
+                "SCANNER",
+                f"Catalog primary={len(primary)} watch={len(watched)}/{len(secondary)} skip={len(skipped)}",
+            )
+        debug("SCANNER", f"Gift types this cycle: {len(to_scan)}")
+        total = 0
+        for index, gift_id in enumerate(to_scan, start=1):
             if self.state.shutdown:
                 break
             total += await self._scan_gift(gift_id, snapshot=snapshot)
-            if snapshot and (index == 1 or index % 25 == 0 or index == len(gift_ids)):
-                log("SNAPSHOT", f"Progress {index}/{len(gift_ids)} types, seen={total}")
+            if index == 1 or index % 10 == 0 or index == len(to_scan):
+                tag = "SNAPSHOT" if snapshot else "SCANNER"
+                log(tag, f"Progress {index}/{len(to_scan)} types, seen={total}")
         if snapshot and not self.state.shutdown:
             self._finish_snapshot()
         if total:
@@ -150,6 +189,10 @@ class MarketplaceScanner:
         log("LIVE", "Initial snapshot complete. Switching to LIVE mode")
 
     async def _load_gift_ids(self) -> list[int]:
+        catalog = await self._load_catalog()
+        return [gift_id for gift_id, _min in catalog]
+
+    async def _load_catalog(self) -> list[tuple[int, int | None]]:
         async def _call():
             async with self.limiter:
                 return await self.client(GetStarGiftsRequest(hash=self._gift_hash))
@@ -157,32 +200,72 @@ class MarketplaceScanner:
         result = await invoke_telegram(_call, stats=self.state.stats, max_backoff=self.settings.max_api_backoff)
         if isinstance(result, StarGiftsNotModified):
             debug("SCANNER", "Star gifts not modified")
-            return list(self._gift_ids)
+            return list(self._gift_catalog or [(gift_id, None) for gift_id in self._gift_ids])
         if not isinstance(result, StarGifts):
             gifts = getattr(result, "gifts", None) or []
         else:
             gifts = result.gifts
             self._gift_hash = getattr(result, "hash", 0) or 0
-        ids: list[int] = []
-        all_ids: list[int] = []
+        catalog: list[tuple[int, int | None]] = []
+        all_ids: list[tuple[int, int | None]] = []
         for gift in gifts:
             if not isinstance(gift, StarGift) and type(gift).__name__ != "StarGift":
                 continue
             gift_id = getattr(gift, "id", None)
             if gift_id is None:
                 continue
-            all_ids.append(int(gift_id))
+            min_stars = _as_optional_int(getattr(gift, "resell_min_stars", None))
+            all_ids.append((int(gift_id), min_stars))
             resale = getattr(gift, "availability_resale", None)
-            min_stars = getattr(gift, "resell_min_stars", None)
             if resale or min_stars:
-                ids.append(int(gift_id))
-        chosen = ids or all_ids
+                catalog.append((int(gift_id), min_stars))
+        chosen = catalog or all_ids
         if chosen:
-            self._gift_ids = chosen
+            self._gift_catalog = chosen
+            self._gift_ids = [gift_id for gift_id, _min in chosen]
         debug("SCANNER", f"Resale gift_ids={len(self._gift_ids)}")
-        return list(self._gift_ids)
+        return list(self._gift_catalog)
+
+    def _partition_catalog(
+        self,
+        catalog: list[tuple[int, int | None]],
+    ) -> tuple[list[tuple[int, int | None]], list[tuple[int, int | None]], list[tuple[int, int | None]]]:
+        primary: list[tuple[int, int | None]] = []
+        secondary: list[tuple[int, int | None]] = []
+        skipped: list[tuple[int, int | None]] = []
+        for gift_id, min_stars in catalog:
+            cached = self.db.get_gift_market_value(gift_id)
+            rank = classify_collection(min_stars, self.settings, cached)
+            item = (gift_id, min_stars)
+            if rank == RANK_SKIP:
+                skipped.append(item)
+            elif rank == RANK_PRIMARY:
+                primary.append(item)
+            elif rank == RANK_SECONDARY:
+                secondary.append(item)
+            else:
+                secondary.append(item)
+        return primary, secondary, skipped
+
+    def _rotate_secondary(self, gift_ids: list[int], limit: int) -> list[int]:
+        if not gift_ids or limit <= 0:
+            return []
+        if limit >= len(gift_ids):
+            return list(gift_ids)
+        start = self._secondary_cursor % len(gift_ids)
+        self._secondary_cursor = (start + limit) % len(gift_ids)
+        doubled = gift_ids + gift_ids
+        return doubled[start : start + limit]
 
     async def _scan_gift(self, gift_id: int, snapshot: bool = False) -> int:
+        if (
+            not snapshot
+            and not self.is_snapshot()
+            and not self.db.gift_was_scanned(gift_id)
+            and not self.db.gift_has_listings(gift_id)
+        ):
+            log("SNAPSHOT", f"New gift type {gift_id}: remember current lots, do not publish")
+            snapshot = True
         offset = ""
         pages = 0
         seen_offsets: set[str] = set()
@@ -223,9 +306,12 @@ class MarketplaceScanner:
             found += len(gifts)
             self.state.stats.inc("scanned", len(gifts))
             self.state.stats.inc("total_scanned", len(gifts))
+            observe = getattr(self.market, "observe_page", None)
+            if callable(observe):
+                observe(gift_id, gifts)
             if snapshot:
                 for gift in gifts:
-                    is_new_signal = await self._process_gift(gift)
+                    is_new_signal = await self._process_gift(gift, snapshot=True)
                     if is_new_signal is False:
                         known_streak += 1
                     else:
@@ -296,12 +382,12 @@ class MarketplaceScanner:
 
         return await invoke_telegram(_call, stats=self.state.stats, max_backoff=self.settings.max_api_backoff)
 
-    async def _process_gift(self, gift: Any) -> Optional[bool]:
+    async def _process_gift(self, gift: Any, snapshot: bool | None = None) -> Optional[bool]:
         listing = parse_listing(gift)
         if listing is None:
             return None
         existing = self.db.get_listing(listing.listing_key)
-        if self.is_snapshot():
+        if snapshot if snapshot is not None else self.is_snapshot():
             return self._snapshot_listing(listing, existing)
 
         signal = self._classify_signal(listing, existing)
@@ -380,6 +466,17 @@ class MarketplaceScanner:
                 return True
 
         owner = self._users.get(listing.owner_id) if listing.owner_id is not None else None
+        preview = self._preview_owner(listing, owner)
+        if _norm_text(preview.manual_tag) == "ignore":
+            self._skip(listing, "manual_tag_ignore")
+            return True
+        gender_filter = self.settings.normalized_gender_filter()
+        preview_gender = _norm_text(preview.manual_gender)
+        if gender_filter and preview_gender and preview_gender != gender_filter:
+            log("FILTER", f"Manual gender: {preview_gender} -> SKIP")
+            self._skip(listing, "manual_gender_mismatch")
+            return True
+
         profile = await self.analyzer.get_profile(listing.owner_id, user=owner) if listing.owner_id else (
             await self.analyzer.get_profile(None, user=None)
         )
@@ -445,6 +542,43 @@ class MarketplaceScanner:
         self.state.stats.record_market(listing.price, listing.market_value, listing.discount_percent)
         await self._enqueue(listing, profile)
         return True
+
+    def _preview_owner(self, listing: Listing, user: Any) -> Profile:
+        profile = Profile(user_id=listing.owner_id)
+        if user is not None:
+            profile.user_id = getattr(user, "id", profile.user_id) or profile.user_id
+            profile.username = getattr(user, "username", None) or None
+            profile.first_name = getattr(user, "first_name", None) or None
+            profile.last_name = getattr(user, "last_name", None) or None
+            if not profile.username:
+                extras = getattr(user, "usernames", None) or []
+                for item in extras:
+                    name = getattr(item, "username", None)
+                    if name:
+                        profile.username = name
+                        break
+        prefs: dict[str, Any] = {}
+        if profile.user_id is not None:
+            cached = self.db.get_profile(int(profile.user_id))
+            if cached is not None:
+                profile.first_name = profile.first_name or cached.first_name
+                profile.last_name = profile.last_name or cached.last_name
+                profile.username = profile.username or cached.username
+                profile.bio = cached.bio
+                profile.language = cached.language
+            prefs = self.db.get_manual_profile_preferences(int(profile.user_id))
+        profile.manual_gender = infer_gender(
+            profile.first_name,
+            prefs.get("manual_gender"),
+            last_name=profile.last_name,
+        )
+        profile.manual_nationality = prefs.get("manual_nationality")
+        profile.manual_tag = prefs.get("manual_tag")
+        if not profile.language:
+            language, score = detect_profile_language(profile)
+            profile.language = language
+            profile.language_score = score
+        return profile
 
     def _classify_signal(self, listing: Listing, existing: Optional[dict[str, Any]]) -> Optional[str]:
         if existing is None:

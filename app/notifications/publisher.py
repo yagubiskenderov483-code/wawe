@@ -357,7 +357,7 @@ class Publisher:
             listing.is_price_change = True
             self.db.record_price_change(listing.listing_key, original_price, listing.price)
 
-        profile = await self.analyzer.get_profile(listing.owner_id, force_refresh=True)
+        profile = await self.analyzer.get_profile(listing.owner_id, force_refresh=False)
         listing.owner_username = profile.username
         listing.manual_gender = profile.manual_gender
         listing.manual_nationality = profile.manual_nationality

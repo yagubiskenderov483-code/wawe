@@ -109,7 +109,7 @@ class Settings:
     bot_username: str = DEFAULT_BOT_USERNAME
     min_price: int = 5000
     max_price: int = 25000
-    scan_interval: float = 2.0
+    scan_interval: float = 5.0
     publish_delay: float = 4.0
     max_nft_count: int = 12
     strict_nft_filter: bool = False
@@ -144,6 +144,8 @@ class Settings:
     max_snapshot_pages_per_gift: int = 1
     resale_page_limit: int = 50
     max_api_backoff: int = 32
+    api_min_interval: float = 0.5
+    api_max_interval: float = 8.0
     market_sample_size: int = 20
     max_market_ratio: float = 3.0
     market_cache_ttl: int = 60
@@ -155,7 +157,7 @@ class Settings:
     publish_existing: bool = False
     memory_only: bool = True
     collection_floor_filter: bool = True
-    collection_floor_min: int = 5000
+    collection_floor_min: int = 0
     collection_floor_max: int = 25000
 
     @property
@@ -270,7 +272,9 @@ def load_settings() -> Settings:
         bot_username=bot_username,
         min_price=min_price,
         max_price=max_price,
-        scan_interval=float(_env("SCAN_INTERVAL", "2")),
+        scan_interval=float(_env("SCAN_INTERVAL", "5")),
+        api_min_interval=_env_float("API_MIN_INTERVAL", 0.5),
+        api_max_interval=_env_float("API_MAX_INTERVAL", 8.0),
         publish_delay=float(_env("PUBLISH_DELAY", "4")),
         max_nft_count=_env_int("MAX_NFT_COUNT", 12),
         strict_nft_filter=_env_bool("STRICT_NFT_FILTER", False),
@@ -312,7 +316,7 @@ def load_settings() -> Settings:
         memory_only=memory_only,
         db_path=":memory:" if memory_only else str(DB_PATH),
         collection_floor_filter=_env_bool("COLLECTION_FLOOR_FILTER", True),
-        collection_floor_min=_env_int("COLLECTION_FLOOR_MIN", min_price),
+        collection_floor_min=_env_int("COLLECTION_FLOOR_MIN", 0),
         collection_floor_max=_env_int("COLLECTION_FLOOR_MAX", max_price),
     )
     return settings

@@ -52,7 +52,11 @@ async def run_tracker() -> None:
     stored_mode = db.get_scanner_mode()
     if stored_mode:
         state.scanner_mode = stored_mode
-    limiter = ApiLimiter(concurrency=1, min_interval=0.3)
+    limiter = ApiLimiter(
+        concurrency=1,
+        min_interval=settings.api_min_interval,
+        max_interval=settings.api_max_interval,
+    )
     client = build_user_client(settings)
     bot = None
     dp = None

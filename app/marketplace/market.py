@@ -209,4 +209,4 @@ class MarketEstimator:
                 )
             )
 
-        return await invoke_telegram(_call, stats=self.stats, max_backoff=self.settings.max_api_backoff)
+        return await invoke_telegram(_call, stats=self.stats, limiter=self.limiter, max_backoff=self.settings.max_api_backoff)

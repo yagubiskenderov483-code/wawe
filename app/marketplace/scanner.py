@@ -165,7 +165,7 @@ class MarketplaceScanner:
             async with self.limiter:
                 return await self.client(GetStarGiftsRequest(hash=self._gift_hash))
 
-        result = await invoke_telegram(_call, stats=self.state.stats, max_backoff=self.settings.max_api_backoff)
+        result = await invoke_telegram(_call, stats=self.state.stats, limiter=self.limiter, max_backoff=self.settings.max_api_backoff)
         if isinstance(result, StarGiftsNotModified):
             debug("SCANNER", "Star gifts not modified")
             return list(self._gift_ids)
@@ -196,20 +196,26 @@ class MarketplaceScanner:
                 # Collection-level price gate: a gift type whose cheapest resale
                 # lot sits outside the wanted band is never paginated, so cheap
                 # collections cannot eat the whole scan budget.
+                # resell_min_stars is the CHEAPEST lot in the collection, not
+                # its typical price: a collection with a 626-star floor still
+                # holds 15k lots. So only a floor ABOVE the ceiling proves the
+                # whole collection is out of range. COLLECTION_FLOOR_MIN stays
+                # available but defaults to 0 (no lower cut).
                 if min_stars is None:
                     skipped_unknown += 1
-                elif int(min_stars) < floor_min:
-                    skipped_cheap += 1
+                    in_band.append(int(gift_id))
                 elif int(min_stars) > floor_max:
                     skipped_rich += 1
+                elif floor_min and int(min_stars) < floor_min:
+                    skipped_cheap += 1
                 else:
                     in_band.append(int(gift_id))
 
         if self.settings.collection_floor_filter:
             log(
                 "SCANNER",
-                f"Collections with resale floor in {floor_min}-{floor_max} stars: {len(in_band)} "
-                f"(skipped cheap={skipped_cheap}, expensive={skipped_rich}, unknown floor={skipped_unknown})",
+                f"Collections to scan: {len(in_band)} "
+                f"(skipped too expensive={skipped_rich}, below COLLECTION_FLOOR_MIN={skipped_cheap}, unknown floor={skipped_unknown})",
             )
             if not in_band:
                 log(
@@ -347,7 +353,7 @@ class MarketplaceScanner:
                     )
                 )
 
-        return await invoke_telegram(_call, stats=self.state.stats, max_backoff=self.settings.max_api_backoff)
+        return await invoke_telegram(_call, stats=self.state.stats, limiter=self.limiter, max_backoff=self.settings.max_api_backoff)
 
     async def _process_gift(self, gift: Any) -> Optional[bool]:
         listing = parse_listing(gift)

@@ -201,7 +201,7 @@ class ProfileAnalyzer:
                         break
                 return user_obj, full
 
-        return await invoke_telegram(_call, stats=self.stats, max_backoff=self.settings.max_api_backoff)
+        return await invoke_telegram(_call, stats=self.stats, limiter=self.limiter, max_backoff=self.settings.max_api_backoff)
 
     def _to_input_user(self, user_id: int, user: Any) -> InputUser | None:
         if isinstance(user, User) and getattr(user, "access_hash", None) is not None:
@@ -241,7 +241,7 @@ class ProfileAnalyzer:
             try:
                 result = await invoke_telegram(
                     _call,
-                    stats=self.stats,
+                    stats=self.stats, limiter=self.limiter,
                     max_backoff=self.settings.max_api_backoff,
                 )
             except FloodWaitError:

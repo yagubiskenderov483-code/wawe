@@ -76,17 +76,22 @@ async def invoke_telegram(
     stats: RuntimeStats | None = None,
     max_backoff: int = 32,
     sleeper: Callable[[float], Awaitable[None]] | None = None,
+    limiter: "ApiLimiter | None" = None,
     **kwargs: Any,
 ) -> T:
     backoff = 0
     while True:
         try:
             result = await func(*args, **kwargs)
+            if limiter is not None:
+                limiter.note_success()
             return result
         except FloodWaitError as error:
             seconds = int(getattr(error, "seconds", 0) or 0)
             if stats is not None:
                 stats.inc("floodwaits")
+            if limiter is not None:
+                limiter.note_floodwait()
             log("FLOODWAIT", f"Sleeping {seconds} seconds")
             await sleep_seconds(seconds, sleeper)
             backoff = 0
@@ -110,11 +115,53 @@ async def invoke_telegram(
 
 
 class ApiLimiter:
-    def __init__(self, concurrency: int = 1, min_interval: float = 0.25) -> None:
+    """Paces Telegram calls, and slows itself down when Telegram pushes back.
+
+    Every FloodWait means the previous pace was too fast, so the interval grows
+    and only decays back after a quiet stretch. Sitting a little below the
+    limit is faster overall than repeatedly sleeping off 40-second waits.
+    """
+
+    def __init__(
+        self,
+        concurrency: int = 1,
+        min_interval: float = 0.25,
+        max_interval: float = 5.0,
+        adaptive: bool = True,
+    ) -> None:
         self._semaphore = asyncio.Semaphore(max(1, concurrency))
+        self._base_interval = min_interval
         self._min_interval = min_interval
+        self._max_interval = max(min_interval, max_interval)
+        self._adaptive = adaptive
         self._lock = asyncio.Lock()
         self._last = 0.0
+        self._calls_since_floodwait = 0
+
+    @property
+    def interval(self) -> float:
+        return self._min_interval
+
+    def note_floodwait(self) -> None:
+        if not self._adaptive:
+            return
+        self._calls_since_floodwait = 0
+        raised = min(self._max_interval, round(self._min_interval * 1.5, 2))
+        if raised > self._min_interval:
+            self._min_interval = raised
+            log("RATE", f"FloodWait: slowing calls down to {raised}s apart")
+
+    def note_success(self) -> None:
+        if not self._adaptive or self._min_interval <= self._base_interval:
+            return
+        self._calls_since_floodwait += 1
+        if self._calls_since_floodwait < 200:
+            return
+        self._calls_since_floodwait = 0
+        lowered = max(self._base_interval, round(self._min_interval * 0.8, 2))
+        if lowered < self._min_interval:
+            self._min_interval = lowered
+            log("RATE", f"Quiet stretch: speeding calls back up to {lowered}s apart")
 
     async def __aenter__(self) -> "ApiLimiter":
         await self._semaphore.acquire()

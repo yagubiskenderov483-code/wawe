@@ -433,6 +433,12 @@ class FakeLimiter:
     async def __aexit__(self, *args):
         return False
 
+    def note_success(self) -> None:
+        pass
+
+    def note_floodwait(self) -> None:
+        pass
+
 
 class StarGift:
     """Matches the duck-typing check in _load_gift_ids (class name matters)."""
@@ -471,7 +477,8 @@ class CollectionFloorTests(unittest.IsolatedAsyncioTestCase):
         scanner.client = AsyncMock(return_value=FakeGiftCatalog(gifts))
         return scanner
 
-    async def test_only_collections_with_floor_in_band(self):
+    async def test_cheap_floor_is_kept_only_expensive_is_dropped(self):
+        """A 626-star floor still allows 15k lots, so the collection is scanned."""
         scanner = self._catalog_scanner(
             [
                 StarGift(1, 626),
@@ -481,10 +488,19 @@ class CollectionFloorTests(unittest.IsolatedAsyncioTestCase):
                 StarGift(5, 12000),
             ],
             collection_floor_filter=True,
+            collection_floor_min=0,
+            collection_floor_max=30000,
+        )
+        self.assertEqual(await scanner._load_gift_ids(), [1, 2, 4, 5])
+
+    async def test_explicit_floor_min_still_cuts_cheap_collections(self):
+        scanner = self._catalog_scanner(
+            [StarGift(1, 626), StarGift(2, 7000), StarGift(3, 45000)],
+            collection_floor_filter=True,
             collection_floor_min=5000,
             collection_floor_max=30000,
         )
-        self.assertEqual(await scanner._load_gift_ids(), [2, 5])
+        self.assertEqual(await scanner._load_gift_ids(), [2])
 
     async def test_filter_disabled_keeps_every_resale_collection(self):
         scanner = self._catalog_scanner(
@@ -493,11 +509,11 @@ class CollectionFloorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(await scanner._load_gift_ids(), [1, 2])
 
-    async def test_empty_band_scans_nothing(self):
+    async def test_everything_too_expensive_scans_nothing(self):
         scanner = self._catalog_scanner(
-            [StarGift(1, 626), StarGift(2, 900)],
+            [StarGift(1, 90000), StarGift(2, 120000)],
             collection_floor_filter=True,
-            collection_floor_min=5000,
+            collection_floor_min=0,
             collection_floor_max=30000,
         )
         self.assertEqual(await scanner._load_gift_ids(), [])

@@ -1,0 +1,80 @@
+services:
+  - type: worker
+    name: wawe-tracker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    autoDeploy: true
+    disk:
+      name: tracker-state
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      # Secrets: set the values in the Render dashboard, not in the repo.
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
+        sync: false
+      - key: TARGET_CHANNEL_ID
+        sync: false
+      - key: ADMIN_USER_ID
+        sync: false
+
+      # Lot flow
+      - key: PUBLISH_EXISTING
+        value: "true"
+      - key: PUBLISH_DELAY
+        value: "4"
+      - key: SCAN_INTERVAL
+        value: "2"
+      - key: MAX_PAGES_PER_GIFT
+        value: "5"
+      - key: MAX_NEW_PER_GIFT_SCAN
+        value: "0"
+      - key: MAX_SAME_GIFT_STREAK
+        value: "3"
+      - key: MAX_QUEUE_SIZE
+        value: "100"
+
+      # Filters
+      - key: MIN_PRICE
+        value: "5000"
+      - key: MAX_PRICE
+        value: "25000"
+      - key: MANUAL_GENDER_FILTER
+        value: "female"
+      - key: STRICT_GENDER
+        value: "true"
+      - key: RUSSIAN_LANGUAGE_REQUIRED
+        value: "true"
+      - key: REQUIRE_FREE_MESSAGES
+        value: "true"
+      - key: ENABLE_ACCOUNT_LEVEL_FILTER
+        value: "true"
+      - key: MAX_ACCOUNT_LEVEL
+        value: "2"
+      - key: MAX_NFT_COUNT
+        value: "12"
+      - key: STRICT_NFT_FILTER
+        value: "false"
+      - key: STRICT_MARKET_FILTER
+        value: "false"
+      - key: MAX_MARKET_RATIO
+        value: "3.0"
+      - key: MIN_SCORE
+        value: "4"
+      - key: MIN_PROFILE_SCORE
+        value: "3"
+      - key: UNIQUE_OWNERS
+        value: "true"
+      - key: DIVERSIFY_GIFTS
+        value: "true"
+
+      - key: DEBUG
+        value: "false"
+      - key: DB_BACKUP_INTERVAL
+        value: "3600"

@@ -164,7 +164,14 @@ class LanguageAndProfileTests(unittest.TestCase):
             passing_profile(manual_gender=None, first_name="Alex", last_name=None, language="ru"),
             settings=cfg,
         )
-        self.assertTrue(unmarked_ru.passed)
+        self.assertFalse(unmarked_ru.passed)
+        self.assertEqual(unmarked_ru.reason, "manual_gender_missing")
+        lenient = settings(manual_gender_filter="female", strict_gender=False)
+        unmarked_ru_lenient = check_manual_profile_tags(
+            passing_profile(manual_gender=None, first_name="Alex", last_name=None, language="ru"),
+            settings=lenient,
+        )
+        self.assertTrue(unmarked_ru_lenient.passed)
         inferred = check_manual_profile_tags(
             passing_profile(manual_gender=None, first_name="Анна"),
             settings=cfg,

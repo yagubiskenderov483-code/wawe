@@ -48,8 +48,13 @@ class FakeMarket:
         return listing
 
 
-def _scanner(db: Database, state: AppState | None = None, paused: bool = False) -> MarketplaceScanner:
-    cfg = settings(manual_gender_filter="")
+def _scanner(
+    db: Database,
+    state: AppState | None = None,
+    paused: bool = False,
+    publish_existing: bool = False,
+) -> MarketplaceScanner:
+    cfg = settings(manual_gender_filter="", publish_existing=publish_existing)
     state = state or AppState()
     if paused:
         state.pause()
@@ -331,6 +336,94 @@ class DiversifyTests(unittest.IsolatedAsyncioTestCase):
             last_model=state.last_published_model,
         )
         self.assertEqual(next_item.listing.model, "Dog")
+
+
+class DrainModeTests(unittest.IsolatedAsyncioTestCase):
+    """PUBLISH_EXISTING=true: current market stock is publishable, not swallowed."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = str(Path(self.tmp.name) / "tracker.db")
+        self.db = Database(self.path)
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp.cleanup()
+
+    async def test_starts_in_live_without_snapshot(self):
+        scanner = _scanner(self.db, publish_existing=True)
+        self.assertEqual(scanner.state.scanner_mode, SCANNER_MODE_LIVE)
+        self.assertFalse(scanner.is_snapshot())
+
+    async def test_existing_stock_is_queued(self):
+        scanner = _scanner(self.db, publish_existing=True)
+
+        class Page:
+            gifts = [
+                StarGiftUnique(100, price=12000, owner_id=111),
+                StarGiftUnique(101, price=13000, owner_id=222),
+                StarGiftUnique(102, price=14000, owner_id=333),
+            ]
+            users = []
+            next_offset = ""
+
+        scanner._fetch_resale_page = AsyncMock(return_value=Page())
+        await scanner._scan_gift(10, snapshot=False)
+        for key in ("gift:100", "gift:101", "gift:102"):
+            self.assertEqual(self.db.get_listing(key)["status"], STATUS_QUEUED)
+        self.assertEqual(scanner.state.queue.qsize(), 3)
+
+    async def test_rows_behind_known_are_still_evaluated(self):
+        scanner = _scanner(self.db, publish_existing=True)
+        self.db.insert_listing(parse_listing(StarGiftUnique(1)))
+        self.db.mark_existing("gift:1", skip_reason="initial_snapshot", is_initial_snapshot=True)
+
+        class Page:
+            gifts = [StarGiftUnique(1), StarGiftUnique(200, price=13000, owner_id=444)]
+            users = []
+            next_offset = ""
+
+        scanner._fetch_resale_page = AsyncMock(return_value=Page())
+        await scanner._scan_gift(10, snapshot=False)
+        self.assertEqual(self.db.get_listing("gift:200")["status"], STATUS_QUEUED)
+
+    async def test_snapshot_leftovers_from_previous_run_are_queued(self):
+        old = _scanner(self.db, publish_existing=False)
+        await old._process_gift(StarGiftUnique(8, price=12000, owner_id=555))
+        self.assertEqual(self.db.get_listing("gift:8")["status"], STATUS_EXISTING)
+        drained = _scanner(self.db, state=AppState(), publish_existing=True)
+        await drained._process_gift(StarGiftUnique(8, price=12000, owner_id=555))
+        self.assertEqual(self.db.get_listing("gift:8")["status"], STATUS_QUEUED)
+
+    async def test_sent_listing_is_never_republished(self):
+        scanner = _scanner(self.db, publish_existing=True)
+        await scanner._process_gift(StarGiftUnique(9, price=12000, owner_id=666))
+        self.db.mark_sent("gift:9", target_channel="-100", message_id=1, price=12000)
+        size = scanner.state.queue.qsize()
+        await scanner._process_gift(StarGiftUnique(9, price=12000, owner_id=666))
+        self.assertEqual(scanner.state.queue.qsize(), size)
+
+    async def test_per_gift_cap_limits_one_scan(self):
+        scanner = _scanner(self.db, publish_existing=True)
+        scanner.settings = settings(
+            manual_gender_filter="",
+            publish_existing=True,
+            max_new_per_gift_scan=1,
+            max_pages_per_gift=5,
+        )
+
+        class Page:
+            gifts = [
+                StarGiftUnique(300, price=12000, owner_id=777),
+                StarGiftUnique(301, price=12500, owner_id=888),
+            ]
+            users = []
+            next_offset = "next"
+
+        scanner._fetch_resale_page = AsyncMock(return_value=Page())
+        await scanner._scan_gift(10, snapshot=False)
+        self.assertGreaterEqual(scanner._queued_this_gift, 1)
+        self.assertEqual(scanner._fetch_resale_page.await_count, 1)
 
 
 class StatusHelpersTests(unittest.TestCase):

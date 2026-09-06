@@ -118,6 +118,7 @@ class Settings:
     enable_account_level_filter: bool = True
     max_account_level: int = 2
     manual_gender_filter: str = "female"
+    strict_gender: bool = True
     manual_nationality_filter: str = ""
     max_queue_size: int = 100
     profile_cache_ttl: int = 300
@@ -135,18 +136,19 @@ class Settings:
     session_path: str = str(SESSION_PATH)
     db_path: str = str(DB_PATH)
     backup_dir: str = str(BACKUP_DIR)
-    max_pages_per_gift: int = 1
+    max_pages_per_gift: int = 5
     max_snapshot_pages_per_gift: int = 1
     resale_page_limit: int = 50
     max_api_backoff: int = 32
     market_sample_size: int = 20
     max_market_ratio: float = 3.0
     market_cache_ttl: int = 60
-    strict_market_filter: bool = True
+    strict_market_filter: bool = False
     diversify_gifts: bool = True
-    max_same_gift_streak: int = 1
+    max_same_gift_streak: int = 3
     unique_owners: bool = True
-    max_new_per_gift_scan: int = 1
+    max_new_per_gift_scan: int = 0
+    publish_existing: bool = True
 
     @property
     def bot_user_id(self) -> int | None:
@@ -261,6 +263,7 @@ def load_settings() -> Settings:
         enable_account_level_filter=_env_bool("ENABLE_ACCOUNT_LEVEL_FILTER", True),
         max_account_level=_env_int("MAX_ACCOUNT_LEVEL", 2),
         manual_gender_filter=_env("MANUAL_GENDER_FILTER", "female") or "female",
+        strict_gender=_env_bool("STRICT_GENDER", True),
         manual_nationality_filter=_env("MANUAL_NATIONALITY_FILTER"),
         max_queue_size=_env_int("MAX_QUEUE_SIZE", 100),
         profile_cache_ttl=_env_int("PROFILE_CACHE_TTL", 300),
@@ -278,13 +281,14 @@ def load_settings() -> Settings:
         market_sample_size=_env_int("MARKET_SAMPLE_SIZE", 20),
         max_market_ratio=_env_float("MAX_MARKET_RATIO", 3.0),
         market_cache_ttl=_env_int("MARKET_CACHE_TTL", 60),
-        strict_market_filter=_env_bool("STRICT_MARKET_FILTER", True),
+        strict_market_filter=_env_bool("STRICT_MARKET_FILTER", False),
         diversify_gifts=_env_bool("DIVERSIFY_GIFTS", True),
-        max_same_gift_streak=_env_int("MAX_SAME_GIFT_STREAK", 1),
+        max_same_gift_streak=_env_int("MAX_SAME_GIFT_STREAK", 3),
         unique_owners=_env_bool("UNIQUE_OWNERS", True),
-        max_pages_per_gift=_env_int("MAX_PAGES_PER_GIFT", 1),
+        max_pages_per_gift=_env_int("MAX_PAGES_PER_GIFT", 5),
         max_snapshot_pages_per_gift=_env_int("MAX_SNAPSHOT_PAGES_PER_GIFT", 1),
-        max_new_per_gift_scan=_env_int("MAX_NEW_PER_GIFT_SCAN", 1),
+        max_new_per_gift_scan=_env_int("MAX_NEW_PER_GIFT_SCAN", 0),
+        publish_existing=_env_bool("PUBLISH_EXISTING", True),
     )
     return settings
 

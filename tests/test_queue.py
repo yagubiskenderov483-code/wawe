@@ -84,7 +84,7 @@ class ChannelAndMessageTests(unittest.TestCase):
     def test_snapshot_uses_one_page(self):
         cfg = settings()
         self.assertEqual(cfg.max_snapshot_pages_per_gift, 1)
-        self.assertEqual(cfg.max_pages_per_gift, 1)
+        self.assertEqual(cfg.max_pages_per_gift, 5)
 
     def test_missing_fields_message(self):
         listing = passing_listing(gift_name=None, model=None, symbol=None, backdrop=None, slug=None, gift_number=None)

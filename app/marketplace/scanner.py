@@ -76,9 +76,20 @@ class MarketplaceScanner:
         self._gift_ids: list[int] = []
         self._gift_hash = 0
         self._users: dict[int, User] = {}
+        self._queued_this_gift = 0
         self._restore_mode()
 
     def _restore_mode(self) -> None:
+        if self.settings.publish_existing:
+            # Drain mode: everything already on the market counts as publishable
+            # stock, so the snapshot phase (which swallows the whole market
+            # without publishing) is skipped entirely.
+            if self.db.get_scanner_mode() != SCANNER_MODE_LIVE:
+                self.db.set_scanner_mode(SCANNER_MODE_LIVE)
+                self.db.set_meta("snapshot_completed_at", utc_now_iso())
+            self.state.scanner_mode = SCANNER_MODE_LIVE
+            log("LIVE", "PUBLISH_EXISTING=true: no snapshot, current market stock is publishable")
+            return
         stored = self.db.get_scanner_mode()
         if stored in {SCANNER_MODE_INITIAL_SNAPSHOT, SCANNER_MODE_LIVE}:
             self.state.scanner_mode = stored
@@ -188,6 +199,8 @@ class MarketplaceScanner:
         seen_offsets: set[str] = set()
         known_streak = 0
         found = 0
+        self._queued_this_gift = 0
+        per_gift_cap = max(0, int(self.settings.max_new_per_gift_scan))
         max_pages = self.settings.max_snapshot_pages_per_gift if snapshot else self.settings.max_pages_per_gift
         while pages < max_pages:
             if self.state.shutdown:
@@ -240,7 +253,10 @@ class MarketplaceScanner:
             pages += 1
             if not next_offset:
                 break
-            if not snapshot and hit_known:
+            if per_gift_cap and self._queued_this_gift >= per_gift_cap:
+                debug("SCANNER", f"Per-gift cap reached for gift_id={gift_id} ({per_gift_cap})")
+                break
+            if not snapshot and hit_known and not self.settings.publish_existing:
                 debug("SCANNER", f"Stopping pagination for gift_id={gift_id}: reached known listings")
                 break
             offset = next_offset
@@ -262,7 +278,11 @@ class MarketplaceScanner:
             if self._is_known_barrier(existing) and first_known is None:
                 first_known = len(rows)
             rows.append((gift, listing, existing))
-        publish_until = first_known if first_known is not None else len(rows)
+        if self.settings.publish_existing:
+            # Drain mode: a known row is only a pagination hint, never a barrier.
+            publish_until = len(rows)
+        else:
+            publish_until = first_known if first_known is not None else len(rows)
         hit_known = first_known is not None
         for index, (gift, listing, existing) in enumerate(rows):
             if self._is_known_barrier(existing):
@@ -457,6 +477,9 @@ class MarketplaceScanner:
             log("LIVE", f"PRICE_CHANGED {listing.listing_key}: {old_price} -> {listing.price} (not a new listing)")
         if existing.get("sent_at") or existing.get("status") == STATUS_SENT:
             return None
+        if self.settings.publish_existing and existing.get("status") == STATUS_EXISTING:
+            # Stock remembered by an earlier snapshot run is publishable now.
+            return "retry"
         if existing.get("status") == STATUS_EXISTING and existing.get("skip_reason") == "live_overflow":
             return "retry"
         if existing.get("is_initial_snapshot") or existing.get("status") == STATUS_EXISTING:
@@ -500,6 +523,7 @@ class MarketplaceScanner:
             return
         self.db.enqueue_listing(listing.listing_key, listing.gift_id, priority)
         self.state.stats.inc("queued")
+        self._queued_this_gift = getattr(self, "_queued_this_gift", 0) + 1
         debug(
             "QUEUE",
             f"Added listing_key={listing.listing_key} gift_id={listing.gift_id} size={self.state.queue.qsize()} priority={priority}",

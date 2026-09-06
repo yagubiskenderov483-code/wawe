@@ -235,6 +235,9 @@ def check_manual_profile_tags(
             log("FILTER", f"Manual gender: {gender} -> SKIP")
             return _fail("manual_gender_mismatch")
         if not gender:
+            if settings.strict_gender:
+                log("FILTER", "Manual gender: unmarked -> SKIP (strict)")
+                return _fail("manual_gender_missing")
             language = profile.language or "unknown"
             if language not in {"ru", "mixed"}:
                 log("FILTER", "Manual gender: unmarked -> SKIP")

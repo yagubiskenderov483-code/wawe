@@ -111,8 +111,8 @@ class Settings:
     publish_delay: float = 4.0
     max_nft_count: int = 12
     strict_nft_filter: bool = False
-    min_score: int = 6
-    min_profile_score: int = 5
+    min_score: int = 4
+    min_profile_score: int = 3
     russian_language_required: bool = True
     require_free_messages: bool = True
     enable_account_level_filter: bool = True
@@ -254,8 +254,8 @@ def load_settings() -> Settings:
         publish_delay=float(_env("PUBLISH_DELAY", "4")),
         max_nft_count=_env_int("MAX_NFT_COUNT", 12),
         strict_nft_filter=_env_bool("STRICT_NFT_FILTER", False),
-        min_score=_env_int("MIN_SCORE", 6),
-        min_profile_score=_env_int("MIN_PROFILE_SCORE", 5),
+        min_score=_env_int("MIN_SCORE", 4),
+        min_profile_score=_env_int("MIN_PROFILE_SCORE", 3),
         russian_language_required=_env_bool("RUSSIAN_LANGUAGE_REQUIRED", True),
         require_free_messages=_env_bool("REQUIRE_FREE_MESSAGES", True),
         enable_account_level_filter=_env_bool("ENABLE_ACCOUNT_LEVEL_FILTER", True),

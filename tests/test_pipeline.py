@@ -220,6 +220,44 @@ class SnapshotAndRestartTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.db.get_listing("gift:200")["skip_reason"], "behind_known")
         self.assertEqual(scanner.state.queue.qsize(), 1)
 
+    async def test_live_scan_checks_whole_page_when_nothing_is_known(self):
+        scanner = _scanner(self.db)
+        scanner._finish_snapshot()
+
+        class Page:
+            gifts = [
+                StarGiftUnique(100, price=800),
+                StarGiftUnique(101, price=12000, owner_id=222),
+            ]
+            users = []
+            next_offset = ""
+
+        scanner._fetch_resale_page = AsyncMock(return_value=Page())
+        await scanner._scan_gift(10, snapshot=False)
+        self.assertEqual(self.db.get_listing("gift:100")["skip_reason"], "price_below_min")
+        self.assertEqual(self.db.get_listing("gift:101")["status"], STATUS_QUEUED)
+        self.assertEqual(scanner.state.queue.qsize(), 1)
+
+    async def test_live_overflow_is_retried(self):
+        scanner = _scanner(self.db)
+        scanner._finish_snapshot()
+        listing = passing_listing(listing_key="gift:77", price=12000, owner_id=222, seller_id=222)
+        listing.is_initial_snapshot = False
+        listing.status = STATUS_EXISTING
+        listing.skip_reason = "live_overflow"
+        self.db.insert_listing(listing)
+        self.db.mark_existing("gift:77", skip_reason="live_overflow", is_initial_snapshot=False)
+
+        class Page:
+            gifts = [StarGiftUnique(77, price=12000, owner_id=222)]
+            users = []
+            next_offset = ""
+
+        scanner._fetch_resale_page = AsyncMock(return_value=Page())
+        await scanner._scan_gift(10, snapshot=False)
+        self.assertEqual(self.db.get_listing("gift:77")["status"], STATUS_QUEUED)
+        self.assertEqual(scanner.state.queue.qsize(), 1)
+
     async def test_unique_owners_can_be_disabled(self):
         scanner = _scanner(self.db)
         scanner.settings = settings(

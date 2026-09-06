@@ -20,11 +20,93 @@ CYRILLIC_RE = re.compile(r"[А-Яа-яЁёІіЇїЄєҐґ]")
 LATIN_RE = re.compile(r"[A-Za-z]")
 
 
+_MALE_A_NAMES = {
+    "никита",
+    "илья",
+    "илия",
+    "савва",
+    "фома",
+    "кузьма",
+    "данила",
+    "лука",
+    "лёва",
+    "лева",
+    "миша",
+    "ваня",
+}
+_UNISEX_NAMES = {"саша", "женя", "валя", "слава", "женя"}
+_FEMALE_LATIN = {
+    "anna",
+    "maria",
+    "marie",
+    "elena",
+    "olga",
+    "irina",
+    "natalia",
+    "natalie",
+    "ekaterina",
+    "kate",
+    "katya",
+    "daria",
+    "darya",
+    "alina",
+    "alisa",
+    "alice",
+    "victoria",
+    "viktoria",
+    "sofia",
+    "sophia",
+    "anastasia",
+    "yulia",
+    "julia",
+    "polina",
+    "ksenia",
+    "oksana",
+    "tatiana",
+    "tatyana",
+    "marina",
+    "svetlana",
+    "ludmila",
+    "lyudmila",
+    "galina",
+    "nina",
+    "vera",
+    "nadezhda",
+    "lyubov",
+    "karina",
+    "arina",
+    "milana",
+    "varvara",
+    "evgenia",
+    "elizaveta",
+}
+
+
+def infer_gender(first_name: str | None, manual: str | None = None) -> str | None:
+    if manual:
+        value = manual.strip().lower()
+        if value:
+            return value
+    raw = (first_name or "").strip()
+    if not raw:
+        return None
+    name = raw.split()[0].casefold()
+    if name in _UNISEX_NAMES:
+        return None
+    if name in _FEMALE_LATIN:
+        return "female"
+    if name in _MALE_A_NAMES:
+        return "male"
+    if name.endswith(("а", "я", "ия", "a", "ia", "ya")):
+        return "female"
+    return None
+
+
 def detect_profile_language(profile: Profile | dict | str | None) -> tuple[str, float]:
     if isinstance(profile, Profile):
-        text = " ".join(part for part in (profile.bio,) if part)
+        text = " ".join(part for part in (profile.first_name, profile.last_name, profile.bio) if part)
     elif isinstance(profile, dict):
-        text = " ".join(str(profile.get(key) or "") for key in ("bio", "about", "description"))
+        text = " ".join(str(profile.get(key) or "") for key in ("first_name", "last_name", "bio", "about", "description"))
     else:
         text = str(profile or "")
     return detect_text_language(text)
@@ -155,7 +237,7 @@ class ProfileAnalyzer:
         if profile.user_id is not None:
             profile.nft_count = await self._count_unique_gifts(profile.user_id, entity)
             prefs = self.db.get_manual_profile_preferences(profile.user_id)
-            profile.manual_gender = prefs.get("manual_gender")
+            profile.manual_gender = infer_gender(profile.first_name, prefs.get("manual_gender"))
             profile.manual_nationality = prefs.get("manual_nationality")
             profile.manual_tag = prefs.get("manual_tag")
             profile.updated_at = utc_now_iso()

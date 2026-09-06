@@ -6,15 +6,25 @@ from typing import Any, Optional
 
 
 STATUS_NEW = "NEW"
+STATUS_EXISTING = "EXISTING"
 STATUS_QUEUED = "QUEUED"
 STATUS_SENT = "SENT"
 STATUS_SKIPPED = "SKIPPED"
 STATUS_ERROR = "ERROR"
+STATUS_PRICE_CHANGED = "PRICE_CHANGED"
+
+SCANNER_MODE_INITIAL_SNAPSHOT = "INITIAL_SNAPSHOT"
+SCANNER_MODE_LIVE = "LIVE"
 
 LANGUAGE_RU = "ru"
 LANGUAGE_EN = "en"
 LANGUAGE_MIXED = "mixed"
 LANGUAGE_UNKNOWN = "unknown"
+
+MARKET_CONFIDENCE_NONE = "none"
+MARKET_CONFIDENCE_LOW = "low"
+MARKET_CONFIDENCE_MEDIUM = "medium"
+MARKET_CONFIDENCE_HIGH = "high"
 
 
 @dataclass
@@ -29,6 +39,7 @@ class Listing:
     symbol: Optional[str] = None
     backdrop: Optional[str] = None
     owner_id: Optional[int] = None
+    seller_id: Optional[int] = None
     first_seen_at: Optional[str] = None
     sent_at: Optional[str] = None
     score: Optional[int] = None
@@ -42,6 +53,27 @@ class Listing:
     status: str = STATUS_NEW
     skip_reason: Optional[str] = None
     last_notified_price: Optional[int] = None
+    market_value: Optional[int] = None
+    floor_price: Optional[int] = None
+    price_ratio: Optional[float] = None
+    discount_percent: Optional[float] = None
+    market_confidence: Optional[str] = None
+    market_sample_size: Optional[int] = None
+    profile_score: Optional[int] = None
+    manual_gender: Optional[str] = None
+    manual_nationality: Optional[str] = None
+    is_initial_snapshot: bool = False
+    queued_at: Optional[str] = None
+    target_channel: Optional[str] = None
+    message_id: Optional[int] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.seller_id is None:
+            self.seller_id = self.owner_id
+        elif self.owner_id is None:
+            self.owner_id = self.seller_id
 
     @property
     def nft_url(self) -> Optional[str]:
@@ -75,6 +107,16 @@ class Profile:
     manual_tag: Optional[str] = None
     updated_at: Optional[str] = None
     cached: bool = False
+
+
+@dataclass
+class MarketEstimate:
+    market_value: Optional[int] = None
+    floor_price: Optional[int] = None
+    sample_size: int = 0
+    confidence: str = MARKET_CONFIDENCE_NONE
+    prices: tuple[int, ...] = ()
+    cache_hit: bool = False
 
 
 @dataclass

@@ -26,6 +26,12 @@ def passing_listing(**overrides) -> Listing:
         collectible=True,
         resale=True,
         is_new=True,
+        market_value=18000,
+        floor_price=15000,
+        price_ratio=12000 / 18000,
+        discount_percent=((18000 - 12000) / 18000) * 100,
+        market_confidence="high",
+        market_sample_size=10,
     )
     data.update(overrides)
     return Listing(**data)

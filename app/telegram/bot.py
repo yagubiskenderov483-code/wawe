@@ -10,10 +10,10 @@ from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message
+from aiogram.types import ChatMemberUpdated, Message
 from telethon import TelegramClient
 
-from app.config import Settings
+from app.config import Settings, bot_id_from_token, resolve_publish_targets
 from app.marketplace.models import utc_now_iso
 from app.profile.analyzer import ProfileAnalyzer
 from app.storage.database import Database
@@ -29,6 +29,16 @@ from app.utils.state import AppState
 router = Router()
 
 _TAG_RE = re.compile(r"(gender|nationality|tag)=([^\s]+)", re.IGNORECASE)
+
+BOT_TOKEN_HELP = (
+    "BOT_TOKEN is invalid or revoked (Telegram Unauthorized). "
+    "Create a new token with @BotFather, set BOT_TOKEN in .env, and restart. "
+    "/login cannot work until Telegram accepts the bot token."
+)
+
+
+class BotUnauthorizedError(RuntimeError):
+    """Raised when Telegram rejects the configured bot token."""
 
 
 class LoginStates(StatesGroup):
@@ -75,21 +85,49 @@ def setup_bot(
     return bot, dp
 
 
-async def verify_target_channels(bot: Bot, settings: Settings) -> None:
-    if not settings.channel_ids:
-        raise RuntimeError("[ERROR] TARGET_CHANNEL_ID is not configured")
-    me = await bot.me()
+async def resolve_bot_id(bot: Bot, settings: Settings) -> int:
+    parsed = bot_id_from_token(settings.bot_token)
+    try:
+        me = await bot.me()
+    except TelegramUnauthorizedError as error:
+        raise BotUnauthorizedError(BOT_TOKEN_HELP) from error
     bot_id = int(me.id)
+    if parsed is not None and parsed != bot_id:
+        log("BOT", "BOT_TOKEN prefix does not match getMe id; using getMe")
+    return bot_id
+
+
+async def verify_target_channels(bot: Bot, settings: Settings, db: Database | None = None) -> tuple[int, ...]:
+    extra = db.get_publish_channels() if db is not None else ()
+    targets = resolve_publish_targets(
+        (*settings.channel_ids, *extra),
+        bot_id=settings.bot_user_id,
+        admin_id=settings.admin_user_id,
+    )
+    if not targets:
+        log(
+            "ERROR",
+            "[ERROR] TARGET_CHANNEL_ID is missing or points to the bot/admin chat. "
+            "Marketplace listings must go to a real channel/supergroup id (usually -100...).",
+        )
+        return ()
+    bot_id = await resolve_bot_id(bot, settings)
+    admin_id = settings.admin_user_id
     failures: list[str] = []
-    usable = 0
-    for chat_id in settings.channel_ids:
+    usable: list[int] = []
+    for chat_id in targets:
         if int(chat_id) == bot_id:
-            log("BOT", f"Target chat {chat_id} matches bot id @{settings.bot_username}; posting to this chat_id")
-            usable += 1
+            failures.append(f"{chat_id}: this is the bot's own id, not a channel")
+            continue
+        if admin_id is not None and int(chat_id) == int(admin_id):
+            failures.append(f"{chat_id}: ADMIN_USER_ID cannot be a marketplace target")
             continue
         try:
             chat = await bot.get_chat(chat_id)
             chat_type = getattr(chat, "type", None)
+            if chat_type in {ChatType.PRIVATE, "private"}:
+                failures.append(f"{chat_id}: private chats are not marketplace targets")
+                continue
             if chat_type in {ChatType.CHANNEL, ChatType.SUPERGROUP, "channel", "supergroup"}:
                 member = await bot.get_chat_member(chat_id, bot_id)
                 can_post = bool(getattr(member, "can_post_messages", False))
@@ -101,17 +139,18 @@ async def verify_target_channels(bot: Bot, settings: Settings) -> None:
                 if not can_post:
                     failures.append(f"{chat_id}: bot cannot post messages")
                     continue
-            usable += 1
-            log("BOT", f"Target chat ready: {chat_id} ({chat_type})")
+            usable.append(int(chat_id))
+            log("BOT", f"Target channel ready: {chat_id} ({chat_type})")
         except (TelegramForbiddenError, TelegramUnauthorizedError):
             failures.append(f"{chat_id}: bot cannot post messages")
         except Exception as error:
             failures.append(f"{chat_id}: {type(error).__name__}")
-    if usable <= 0:
+    if not usable:
         detail = "; ".join(failures) or "unknown reason"
-        raise RuntimeError(f"[ERROR] Bot cannot post messages to target channel ({detail})")
+        log("ERROR", f"Bot cannot post marketplace listings to TARGET_CHANNEL_ID ({detail})")
     for item in failures:
-        log("ERROR", f"Bot cannot post messages to target channel: {item}")
+        log("ERROR", f"Invalid marketplace target: {item}")
+    return tuple(usable)
 
 
 def _is_private(message: Message) -> bool:
@@ -255,21 +294,38 @@ async def login_password_received(message: Message, state: FSMContext) -> None:
     await message.answer("Вход выполнен. Scanner запущен.")
 
 
+def _listing_targets() -> tuple[int, ...]:
+    extra = ctx.db.get_publish_channels() if ctx.db is not None else ()
+    return resolve_publish_targets(
+        (*ctx.settings.channel_ids, *extra),
+        bot_id=ctx.settings.bot_user_id,
+        admin_id=ctx.settings.admin_user_id,
+    )
+
+
 async def _register_operator_chat(message: Message) -> None:
-    if not _is_private(message) or not _is_operator(message):
+    # Private chats are for /login and commands only. Lots go to the channel.
+    return
+
+
+@router.my_chat_member()
+async def bot_added_to_chat(event: ChatMemberUpdated) -> None:
+    chat = event.chat
+    chat_type = getattr(chat, "type", None)
+    new_status = getattr(event.new_chat_member, "status", None)
+    if chat_type not in {ChatType.CHANNEL, ChatType.SUPERGROUP, "channel", "supergroup"}:
+        log("BOT", f"Ignoring non-channel membership chat={getattr(chat, 'id', None)} type={chat_type}")
         return
-    chat_id = getattr(message.chat, "id", None)
-    if chat_id is None:
+    chat_id = int(chat.id)
+    if chat_id >= 0:
         return
-    bot_id = None
-    token = ctx.settings.bot_token or ""
-    prefix = token.split(":", 1)[0]
-    if prefix.isdigit():
-        bot_id = int(prefix)
-    if bot_id is not None and int(chat_id) == bot_id:
+    if new_status in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR, "administrator", "creator"}:
+        ctx.db.add_publish_channel(chat_id, getattr(chat, "title", None))
+        log("BOT", f"Bot is admin in channel {chat_id}; listings will go there")
         return
-    ctx.db.add_notify_chat(int(chat_id))
-    log("BOT", "Operator chat registered for listing delivery")
+    if new_status in {ChatMemberStatus.KICKED, ChatMemberStatus.LEFT, "kicked", "left"}:
+        ctx.db.remove_publish_channel(chat_id)
+        log("BOT", f"Bot removed from channel {chat_id}")
 
 
 @router.message(Command("start"))
@@ -277,7 +333,7 @@ async def cmd_start(message: Message) -> None:
     await _register_operator_chat(message)
     username = ctx.settings.bot_username.lstrip("@")
     authorized = ctx.state.user_authorized
-    targets = ctx.db.get_notify_chats()
+    targets = _listing_targets()
     login_hint = (
         "User-сессия уже активна."
         if authorized
@@ -292,8 +348,10 @@ async def cmd_start(message: Message) -> None:
     await message.answer(
         "Marketplace Tracker запущен.\n"
         f"Бот: @{username}\n"
-        f"Лоты будут приходить сюда, в этот чат.\n"
-        f"Получатели: {', '.join(str(item) for item in targets) or 'этот чат'}\n"
+        "Этот чат — только команды. Лоты идут в канал, не в бота.\n"
+        f"Канал: {', '.join(str(item) for item in targets) or 'канал ещё не задан'}\n"
+        f"Scanner mode: {ctx.state.scanner_mode}\n"
+        "Только новые лоты после snapshot. Один владелец — один раз. Девушки, RU.\n"
         "Пауза между лотами: 4 секунды.\n\n"
         f"{login_hint}"
     )
@@ -301,8 +359,10 @@ async def cmd_start(message: Message) -> None:
 
 @router.message(Command("pause"))
 async def cmd_pause(message: Message) -> None:
-    ctx.state.pause()
-    await message.answer("Scanner: PAUSED\nPublisher дошлёт очередь и будет ждать.")
+    items = ctx.state.pause()
+    for item in items:
+        ctx.db.cancel_queue(item.listing.listing_key, "pause_drained")
+    await message.answer("Scanner: PAUSED\nОчередь сброшена. Лоты в канал не уходят, пока /resume.")
 
 
 @router.message(Command("resume"))
@@ -315,12 +375,13 @@ async def cmd_resume(message: Message) -> None:
 async def cmd_status(message: Message) -> None:
     await _register_operator_chat(message)
     stats = ctx.state.stats
-    targets = ctx.db.get_notify_chats()
+    targets = _listing_targets()
     text = (
         f"Scanner: {ctx.state.scanner_status()}\n"
+        f"Mode: {ctx.state.scanner_mode}\n"
         f"Publisher: {ctx.state.publisher_status()}\n"
         f"User session: {'AUTHORIZED' if ctx.state.user_authorized else 'WAITING_LOGIN'}\n"
-        f"Deliver to: {', '.join(str(item) for item in targets) or '-'}\n"
+        f"Channel: {', '.join(str(item) for item in targets) or '-'}\n"
         f"Queue: {ctx.state.queue.qsize()}\n"
         f"Last scan: {stats.last_scan or '-'}\n"
         f"Last publish: {stats.last_publish or '-'}\n"

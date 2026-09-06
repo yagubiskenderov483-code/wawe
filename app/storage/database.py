@@ -402,12 +402,17 @@ class Database:
     def mark_status(self, listing_key: str, status: str, skip_reason: str | None = None) -> None:
         self.update_listing(listing_key, status=status, skip_reason=skip_reason)
 
-    def mark_existing(self, listing_key: str) -> None:
+    def mark_existing(
+        self,
+        listing_key: str,
+        skip_reason: str = "initial_snapshot",
+        is_initial_snapshot: bool = True,
+    ) -> None:
         self.update_listing(
             listing_key,
             status=STATUS_EXISTING,
-            is_initial_snapshot=1,
-            skip_reason="initial_snapshot",
+            is_initial_snapshot=1 if is_initial_snapshot else 0,
+            skip_reason=skip_reason,
         )
 
     def mark_sent(

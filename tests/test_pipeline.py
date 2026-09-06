@@ -11,6 +11,7 @@ from app.marketplace.models import (
     STATUS_NEW,
     STATUS_QUEUED,
     STATUS_SENT,
+    STATUS_SKIPPED,
     QueueItem,
 )
 from app.marketplace.parser import parse_listing
@@ -192,6 +193,31 @@ class SnapshotAndRestartTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.db.get_listing("gift:1")["status"], STATUS_EXISTING)
         trailing = self.db.get_listing("gift:200")
         self.assertEqual(trailing["status"], STATUS_EXISTING)
+        self.assertEqual(scanner.state.queue.qsize(), 1)
+
+    async def test_live_scan_still_checks_later_new_lots_before_known(self):
+        scanner = _scanner(self.db)
+        await scanner._process_gift(StarGiftUnique(1))
+        scanner._finish_snapshot()
+
+        class Page:
+            gifts = [
+                StarGiftUnique(100, price=800),
+                StarGiftUnique(101, price=12000, owner_id=222),
+                StarGiftUnique(1),
+                StarGiftUnique(200, price=13000, owner_id=333),
+            ]
+            users = []
+            next_offset = ""
+
+        scanner._fetch_resale_page = AsyncMock(return_value=Page())
+        await scanner._scan_gift(10, snapshot=False)
+        cheap = self.db.get_listing("gift:100")
+        self.assertEqual(cheap["status"], STATUS_SKIPPED)
+        self.assertEqual(cheap["skip_reason"], "price_below_min")
+        self.assertEqual(self.db.get_listing("gift:101")["status"], STATUS_QUEUED)
+        self.assertEqual(self.db.get_listing("gift:200")["status"], STATUS_EXISTING)
+        self.assertEqual(self.db.get_listing("gift:200")["skip_reason"], "behind_known")
         self.assertEqual(scanner.state.queue.qsize(), 1)
 
     async def test_unique_owners_can_be_disabled(self):

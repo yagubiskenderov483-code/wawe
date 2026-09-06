@@ -223,40 +223,59 @@ class MarketplaceScanner:
             found += len(gifts)
             self.state.stats.inc("scanned", len(gifts))
             self.state.stats.inc("total_scanned", len(gifts))
-            page_new = 0
-            hit_known = False
-            for gift in gifts:
-                if snapshot:
+            if snapshot:
+                for gift in gifts:
                     is_new_signal = await self._process_gift(gift)
                     if is_new_signal is False:
                         known_streak += 1
                     else:
                         known_streak = 0
-                    continue
-                listing = parse_listing(gift)
-                if listing is None:
-                    continue
-                existing = self.db.get_listing(listing.listing_key)
-                if existing is not None:
-                    hit_known = True
+                hit_known = known_streak > 0
+            else:
+                hit_known = await self._process_live_page(gifts)
+                if hit_known:
                     known_streak += 1
-                    continue
-                if hit_known or page_new >= self.settings.max_new_per_gift_scan:
-                    self._remember_existing(listing)
-                    continue
-                await self._process_gift(gift)
-                page_new += 1
-                known_streak = 0
             next_offset = getattr(result, "next_offset", None) or ""
             self.db.set_scanner_offset(gift_id, next_offset)
             pages += 1
             if not next_offset:
                 break
-            if not snapshot and (hit_known or known_streak >= 1):
+            if not snapshot and hit_known:
                 debug("SCANNER", f"Stopping pagination for gift_id={gift_id}: reached known listings")
                 break
             offset = next_offset
         return found
+
+    async def _process_live_page(self, gifts: list[Any]) -> bool:
+        """Publish every unseen listing before the first known one.
+
+        If the whole page is unseen (old stock we never snapshotted), only the
+        first max_new_per_gift_scan items are candidates; the rest are remembered.
+        """
+        rows: list[tuple[Any, Listing, Optional[dict[str, Any]]]] = []
+        first_known: int | None = None
+        for gift in gifts:
+            listing = parse_listing(gift)
+            if listing is None:
+                continue
+            existing = self.db.get_listing(listing.listing_key)
+            if existing is not None and first_known is None:
+                first_known = len(rows)
+            rows.append((gift, listing, existing))
+        if first_known is None:
+            publish_until = min(len(rows), self.settings.max_new_per_gift_scan)
+        else:
+            publish_until = first_known
+        hit_known = first_known is not None
+        for index, (gift, listing, existing) in enumerate(rows):
+            if existing is not None:
+                continue
+            if index < publish_until:
+                await self._process_gift(gift)
+            else:
+                reason = "behind_known" if hit_known else "live_overflow"
+                self._remember_existing(listing, reason=reason)
+        return hit_known
 
     async def _fetch_resale_page(self, gift_id: int, offset: str) -> Any:
         from telethon.tl.functions.payments import GetResaleStarGiftsRequest
@@ -316,14 +335,18 @@ class MarketplaceScanner:
 
     def _remember_existing(self, listing: Listing, reason: str = "already_on_market") -> bool:
         listing.is_new = False
-        listing.is_initial_snapshot = True
+        listing.is_initial_snapshot = reason == "initial_snapshot"
         listing.status = STATUS_EXISTING
         listing.skip_reason = reason
         inserted = self.db.insert_listing(listing)
         if not inserted:
             self.state.stats.inc("duplicates")
             return False
-        self.db.mark_existing(listing.listing_key)
+        self.db.mark_existing(
+            listing.listing_key,
+            skip_reason=reason,
+            is_initial_snapshot=reason == "initial_snapshot",
+        )
         self.state.stats.inc("existing")
         log("SNAPSHOT" if reason == "initial_snapshot" else "LIVE", f"Existing listing -> SKIP {listing.listing_key}")
         return False

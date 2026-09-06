@@ -116,7 +116,7 @@ cp .env.example .env
 5. Диапазон номера NFT
 6. Blacklist, затем whitelist
 7. Русский язык публичного текста профиля
-8. Количество collectible gifts `0–12` (если счёт недоступен — SKIP)
+8. Количество collectible gifts `0–12` (если счёт недоступен — не отклоняет)
 9. Free messages в ЛС
 10. Account level не выше 2
 11. Только девушки

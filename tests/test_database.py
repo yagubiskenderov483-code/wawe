@@ -89,7 +89,22 @@ class DatabaseTests(unittest.TestCase):
         self.db.delete_manual_profile_preference(7)
         self.assertIsNone(self.db.get_manual_profile_preferences(7)["manual_gender"])
 
-    def test_notify_chats(self):
+    def test_listing_price_history_on_insert(self):
+        listing = passing_listing(listing_key="gift:hist", price=15000)
+        self.db.insert_listing(listing)
+        history = self.db.get_listing_price_history("gift:hist")
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["price"], 15000)
+
+    def test_scanner_mode_and_market_cache(self):
+        self.db.set_scanner_mode("LIVE")
+        self.assertEqual(self.db.get_scanner_mode(), "LIVE")
+        self.db.set_market_cache("10|A|S|B", 10, "A", "S", "B", 600, 500, 7, "medium")
+        cached = self.db.get_market_cache("10|A|S|B", ttl_seconds=60)
+        self.assertIsNotNone(cached)
+        self.assertEqual(cached["market_value"], 600)
+        stale = self.db.get_market_cache("10|A|S|B", ttl_seconds=0)
+        self.assertIsNone(stale)
         self.db.add_notify_chat(555001)
         self.db.add_notify_chat(555001)
         self.assertEqual(self.db.get_notify_chats(), (555001,))

@@ -129,10 +129,14 @@ class MarketplaceScanner:
         debug("SCANNER", f"Gift types for resale: {len(gift_ids)}")
         total = 0
         snapshot = self.is_snapshot()
-        for gift_id in gift_ids:
+        if snapshot:
+            log("SNAPSHOT", f"Remembering current market ({len(gift_ids)} gift types). Nothing is published yet.")
+        for index, gift_id in enumerate(gift_ids, start=1):
             if self.state.shutdown:
                 break
             total += await self._scan_gift(gift_id, snapshot=snapshot)
+            if snapshot and (index == 1 or index % 25 == 0 or index == len(gift_ids)):
+                log("SNAPSHOT", f"Progress {index}/{len(gift_ids)} types, seen={total}")
         if snapshot and not self.state.shutdown:
             self._finish_snapshot()
         if total:

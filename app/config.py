@@ -136,7 +136,7 @@ class Settings:
     db_path: str = str(DB_PATH)
     backup_dir: str = str(BACKUP_DIR)
     max_pages_per_gift: int = 1
-    max_snapshot_pages_per_gift: int = 40
+    max_snapshot_pages_per_gift: int = 1
     resale_page_limit: int = 50
     max_api_backoff: int = 32
     market_sample_size: int = 20
@@ -282,7 +282,7 @@ def load_settings() -> Settings:
         max_same_gift_streak=_env_int("MAX_SAME_GIFT_STREAK", 1),
         unique_owners=_env_bool("UNIQUE_OWNERS", True),
         max_pages_per_gift=_env_int("MAX_PAGES_PER_GIFT", 1),
-        max_snapshot_pages_per_gift=_env_int("MAX_SNAPSHOT_PAGES_PER_GIFT", 40),
+        max_snapshot_pages_per_gift=_env_int("MAX_SNAPSHOT_PAGES_PER_GIFT", 1),
     )
     return settings
 

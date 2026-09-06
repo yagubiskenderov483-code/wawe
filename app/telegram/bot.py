@@ -376,9 +376,16 @@ async def cmd_status(message: Message) -> None:
     await _register_operator_chat(message)
     stats = ctx.state.stats
     targets = _listing_targets()
+    mode = ctx.state.scanner_mode
+    snapshot_hint = (
+        "\nSnapshot: запоминаю текущий рынок, в канал пока ничего не шлю. "
+        "После LIVE пойдут только новые лоты."
+        if mode == "INITIAL_SNAPSHOT"
+        else ""
+    )
     text = (
         f"Scanner: {ctx.state.scanner_status()}\n"
-        f"Mode: {ctx.state.scanner_mode}\n"
+        f"Mode: {mode}\n"
         f"Publisher: {ctx.state.publisher_status()}\n"
         f"User session: {'AUTHORIZED' if ctx.state.user_authorized else 'WAITING_LOGIN'}\n"
         f"Channel: {', '.join(str(item) for item in targets) or '-'}\n"
@@ -386,10 +393,12 @@ async def cmd_status(message: Message) -> None:
         f"Last scan: {stats.last_scan or '-'}\n"
         f"Last publish: {stats.last_publish or '-'}\n"
         f"Scanned: {stats.get('total_scanned')}\n"
+        f"Existing: {stats.get('existing')}\n"
         f"New: {stats.get('new_listings')}\n"
         f"Filtered: {stats.get('filtered')}\n"
         f"Sent: {stats.get('sent')}\n"
         f"Errors: {stats.get('errors')}"
+        f"{snapshot_hint}"
     )
     await message.answer(text)
 

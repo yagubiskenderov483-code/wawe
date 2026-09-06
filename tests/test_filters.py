@@ -188,6 +188,31 @@ class LanguageAndProfileTests(unittest.TestCase):
         )
         self.assertTrue(last_name.passed)
 
+    def test_male_hypocorisms_do_not_pass_as_female(self):
+        cfg = settings(manual_gender_filter="female")
+        for name in ("Витя", "Вася", "Костя", "Гоша", "Жора", "Валера", "Лёха", "Саня"):
+            result = check_manual_profile_tags(
+                passing_profile(manual_gender=None, first_name=name, last_name=None),
+                settings=cfg,
+            )
+            self.assertFalse(result.passed, f"{name} must not pass a female-only filter")
+
+    def test_female_names_still_pass(self):
+        cfg = settings(manual_gender_filter="female")
+        for name in ("Настя", "Катя", "Аня", "Соня", "Юля", "Полина"):
+            result = check_manual_profile_tags(
+                passing_profile(manual_gender=None, first_name=name, last_name=None),
+                settings=cfg,
+            )
+            self.assertTrue(result.passed, f"{name} must pass a female-only filter")
+
+    def test_unknown_name_skipped_unless_suffix_guess_enabled(self):
+        strict = settings(manual_gender_filter="female")
+        profile_kwargs = dict(manual_gender=None, first_name="Мируза", last_name=None)
+        self.assertFalse(check_manual_profile_tags(passing_profile(**profile_kwargs), settings=strict).passed)
+        lenient = settings(manual_gender_filter="female", gender_suffix_guess=True)
+        self.assertTrue(check_manual_profile_tags(passing_profile(**profile_kwargs), settings=lenient).passed)
+
     def test_manual_nationality_filter(self):
         cfg = settings(manual_nationality_filter="ru")
         self.assertTrue(check_manual_profile_tags(passing_profile(manual_nationality="ru"), settings=cfg).passed)

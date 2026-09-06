@@ -160,6 +160,7 @@ class ProfileAnalyzer:
                 profile.first_name,
                 prefs.get("manual_gender"),
                 last_name=profile.last_name,
+                suffix_guess=self.settings.gender_suffix_guess,
             )
             profile.manual_nationality = prefs.get("manual_nationality")
             profile.manual_tag = prefs.get("manual_tag")

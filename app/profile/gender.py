@@ -64,6 +64,65 @@ _MALE_A_NAMES = {
     "lyosha",
     "seryozha",
 }
+_MALE_A_NAMES |= {
+    # Russian male hypocorisms ending in -а / -я. Without these the
+    # "cyrillic name ends in а/я -> female" guess labels every one of them
+    # female, which is how men reach a girls-only channel.
+    "витя",
+    "вася",
+    "петя",
+    "митя",
+    "сеня",
+    "тёма",
+    "тема",
+    "гоша",
+    "жора",
+    "лёха",
+    "леха",
+    "валера",
+    "серёга",
+    "серега",
+    "гриша",
+    "яша",
+    "боря",
+    "федя",
+    "кеша",
+    "сева",
+    "тоха",
+    "саня",
+    "гера",
+    "эдя",
+    "додя",
+    "жека",
+    "димка",
+    "вовка",
+    "санька",
+    "vitya",
+    "vasya",
+    "petya",
+    "mitya",
+    "senya",
+    "tyoma",
+    "tema",
+    "gosha",
+    "zhora",
+    "lyokha",
+    "lekha",
+    "valera",
+    "seryoga",
+    "seryoga",
+    "grisha",
+    "yasha",
+    "borya",
+    "fedya",
+    "kesha",
+    "seva",
+    "tokha",
+    "sanya",
+    "gera",
+    "zheka",
+}
+
 _UNISEX_NAMES = {"саша", "женя", "валя", "слава", "sasha", "zhenya"}
 _FEMALE_NAMES = {
     "anna",
@@ -283,7 +342,15 @@ def infer_gender(
     first_name: str | None,
     manual: str | None = None,
     last_name: str | None = None,
+    suffix_guess: bool = False,
 ) -> str | None:
+    """Infer gender from a display name.
+
+    `suffix_guess` enables the old "cyrillic name ends in а/я -> female" rule.
+    It is off by default: Russian male hypocorisms (Витя, Вася, Костя, Гоша)
+    end the same way, so the rule lets men through a female-only filter.
+    Names outside the known lists return None, which a strict filter skips.
+    """
     if manual:
         value = manual.strip().lower()
         if value:
@@ -299,11 +366,11 @@ def infer_gender(
         return "female"
     if name in _MALE_A_NAMES:
         return "male"
-    if _CYRILLIC_RE.search(name) and name.endswith(("а", "я", "ия")):
-        return "female"
     last_guess = _gender_from_last_name(_name_tokens(last_name))
     if last_guess:
         return last_guess
+    if suffix_guess and _CYRILLIC_RE.search(name) and name.endswith(("а", "я", "ия")):
+        return "female"
     return None
 
 

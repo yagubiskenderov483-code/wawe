@@ -217,6 +217,7 @@ def check_manual_profile_tags(
             profile.first_name,
             prefs.get("manual_gender", profile.manual_gender),
             last_name=profile.last_name,
+            suffix_guess=bool(settings.gender_suffix_guess) if settings is not None else False,
         )
     )
     nationality = _norm(prefs.get("manual_nationality", profile.manual_nationality))

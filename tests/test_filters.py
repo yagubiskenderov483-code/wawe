@@ -4,6 +4,9 @@ import unittest
 
 from tests.helpers import passing_listing, passing_profile, settings
 from app.marketplace.filters import (
+    RANK_PRIMARY,
+    RANK_SECONDARY,
+    RANK_SKIP,
     calculate_priority,
     calculate_profile_score,
     calculate_score,
@@ -19,8 +22,26 @@ from app.marketplace.filters import (
     check_price,
     check_symbol,
     check_whitelist,
+    classify_collection,
     should_publish,
 )
+
+
+class CatalogRankTests(unittest.TestCase):
+    def test_in_band_floor_is_primary(self):
+        cfg = settings(min_price=5000, max_price=25000, max_market_ratio=3.0)
+        self.assertEqual(classify_collection(8000, cfg), RANK_PRIMARY)
+        self.assertEqual(classify_collection(2000, cfg), RANK_PRIMARY)
+
+    def test_cheap_floor_is_secondary_unless_cache_says_otherwise(self):
+        cfg = settings(min_price=5000, max_price=25000, max_market_ratio=3.0)
+        self.assertEqual(classify_collection(200, cfg), RANK_SECONDARY)
+        self.assertEqual(classify_collection(200, cfg, cached_market=12000), RANK_PRIMARY)
+        self.assertEqual(classify_collection(None, cfg), RANK_SECONDARY)
+
+    def test_too_expensive_floor_is_skipped(self):
+        cfg = settings(min_price=5000, max_price=25000, max_market_ratio=3.0)
+        self.assertEqual(classify_collection(40000, cfg), RANK_SKIP)
 
 
 class PriceFilterTests(unittest.TestCase):

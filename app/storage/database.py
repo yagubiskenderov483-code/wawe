@@ -521,6 +521,43 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def gift_was_scanned(self, gift_id: int | None) -> bool:
+        if gift_id is None:
+            return False
+        row = self.conn.execute(
+            "SELECT 1 FROM scanner_state WHERE gift_id = ? LIMIT 1",
+            (int(gift_id),),
+        ).fetchone()
+        return row is not None
+
+    def gift_has_listings(self, gift_id: int | None) -> bool:
+        if gift_id is None:
+            return False
+        row = self.conn.execute(
+            "SELECT 1 FROM listings WHERE gift_id = ? LIMIT 1",
+            (int(gift_id),),
+        ).fetchone()
+        return row is not None
+
+    def get_gift_market_value(self, gift_id: int | None) -> int | None:
+        if gift_id is None:
+            return None
+        row = self.conn.execute(
+            """
+            SELECT market_value FROM market_prices
+            WHERE gift_id = ? AND market_value IS NOT NULL
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (int(gift_id),),
+        ).fetchone()
+        if not row or row["market_value"] is None:
+            return None
+        try:
+            return int(row["market_value"])
+        except (TypeError, ValueError):
+            return None
+
     def get_market_cache(self, cache_key: str, ttl_seconds: int) -> Optional[dict[str, Any]]:
         row = self.conn.execute(
             "SELECT * FROM market_prices WHERE cache_key = ?",

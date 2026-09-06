@@ -36,6 +36,10 @@ class StarGiftUnique:
 class FakeMarket:
     def __init__(self, value: int = 18000):
         self.value = value
+        self.observed = []
+
+    def observe_page(self, gift_id, gifts):
+        self.observed.append((gift_id, len(gifts)))
 
     async def estimate(self, listing, force_refresh: bool = False):
         listing.market_value = self.value
@@ -223,6 +227,7 @@ class SnapshotAndRestartTests(unittest.IsolatedAsyncioTestCase):
     async def test_live_scan_checks_whole_page_when_nothing_is_known(self):
         scanner = _scanner(self.db)
         scanner._finish_snapshot()
+        self.db.set_scanner_offset(10, "")
 
         class Page:
             gifts = [
@@ -269,6 +274,89 @@ class SnapshotAndRestartTests(unittest.IsolatedAsyncioTestCase):
         await scanner._process_gift(StarGiftUnique(50, price=12000, owner_id=111))
         await scanner._process_gift(StarGiftUnique(51, price=13000, owner_id=111))
         self.assertEqual(scanner.state.queue.qsize(), 2)
+
+    async def test_live_scan_paginates_past_all_new_cheap_page(self):
+        scanner = _scanner(self.db)
+        scanner.settings = settings(
+            target_channel_id=-100123,
+            max_pages_per_gift=3,
+            unique_owners=True,
+            manual_gender_filter="",
+        )
+        await scanner._process_gift(StarGiftUnique(1))
+        scanner._finish_snapshot()
+
+        pages = [
+            type(
+                "Page",
+                (),
+                {
+                    "gifts": [StarGiftUnique(200, price=800), StarGiftUnique(201, price=900)],
+                    "users": [],
+                    "next_offset": "p2",
+                },
+            )(),
+            type(
+                "Page",
+                (),
+                {
+                    "gifts": [StarGiftUnique(202, price=12000, owner_id=333), StarGiftUnique(1)],
+                    "users": [],
+                    "next_offset": "",
+                },
+            )(),
+        ]
+
+        async def fetch(_gift_id, offset):
+            return pages[0] if not offset else pages[1]
+
+        scanner._fetch_resale_page = AsyncMock(side_effect=fetch)
+        await scanner._scan_gift(10, snapshot=False)
+        self.assertEqual(self.db.get_listing("gift:200")["skip_reason"], "price_below_min")
+        self.assertEqual(self.db.get_listing("gift:202")["status"], STATUS_QUEUED)
+        self.assertEqual(scanner.state.queue.qsize(), 1)
+        self.assertEqual(len(scanner.market.observed), 2)
+
+    async def test_male_name_skips_without_profile_fetch(self):
+        scanner = _scanner(self.db)
+        scanner.settings = settings(manual_gender_filter="female", unique_owners=True)
+        scanner._finish_snapshot()
+        scanner._users[555] = type(
+            "User",
+            (),
+            {"id": 555, "first_name": "Дима", "last_name": "Иванов", "username": None, "usernames": []},
+        )()
+        await scanner._process_gift(StarGiftUnique(80, price=12000, owner_id=555))
+        scanner.analyzer.get_profile.assert_not_called()
+        self.assertEqual(self.db.get_listing("gift:80")["skip_reason"], "manual_gender_mismatch")
+        self.assertEqual(scanner.state.stats.get("skip_gender"), 1)
+
+    async def test_unseen_gift_type_is_snapshotted(self):
+        scanner = _scanner(self.db)
+        scanner._finish_snapshot()
+
+        class Page:
+            gifts = [StarGiftUnique(90, price=12000, owner_id=444)]
+            users = []
+            next_offset = ""
+
+        scanner._fetch_resale_page = AsyncMock(return_value=Page())
+        await scanner._scan_gift(99, snapshot=False)
+        row = self.db.get_listing("gift:90")
+        self.assertEqual(row["status"], STATUS_EXISTING)
+        self.assertTrue(scanner.state.queue.empty())
+
+    def test_partition_skips_expensive_and_rotates_cheap(self):
+        scanner = _scanner(self.db)
+        catalog = [(1, 8000), (2, 200), (3, 40000), (4, 150), (5, 18000), (6, None)]
+        primary, secondary, skipped = scanner._partition_catalog(catalog)
+        self.assertEqual([gift_id for gift_id, _min in primary], [1, 5])
+        self.assertEqual([gift_id for gift_id, _min in skipped], [3])
+        self.assertEqual([gift_id for gift_id, _min in secondary], [2, 4, 6])
+        first = scanner._rotate_secondary([2, 4, 6], 2)
+        second = scanner._rotate_secondary([2, 4, 6], 2)
+        self.assertEqual(first, [2, 4])
+        self.assertEqual(second, [6, 2])
 
     async def test_pause_does_not_enqueue(self):
         state = AppState()
@@ -331,6 +419,60 @@ class DiversifyTests(unittest.IsolatedAsyncioTestCase):
             last_model=state.last_published_model,
         )
         self.assertEqual(next_item.listing.model, "Dog")
+
+
+class NftShortcutTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Database(str(Path(self.tmp.name) / "tracker.db"))
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp.cleanup()
+
+    async def test_low_stargifts_count_skips_saved_gifts(self):
+        from app.profile.analyzer import ProfileAnalyzer
+
+        analyzer = ProfileAnalyzer(MagicMock(), self.db, settings(), MagicMock(), MagicMock())
+        user = type("UserObj", (), {"id": 9, "username": "ann", "first_name": "Анна", "last_name": None, "usernames": None})()
+        full = type(
+            "Full",
+            (),
+            {
+                "about": "Привет",
+                "personal_channel_id": None,
+                "stargifts_count": 4,
+                "stars_rating": None,
+                "send_paid_messages_stars": 0,
+            },
+        )()
+        analyzer._fetch_full_user = AsyncMock(return_value=(user, full))
+        analyzer._count_unique_gifts = AsyncMock(return_value=99)
+        profile = await analyzer.get_profile(9, user=user)
+        analyzer._count_unique_gifts.assert_not_called()
+        self.assertEqual(profile.nft_count, 4)
+
+    async def test_high_stargifts_count_counts_unique(self):
+        from app.profile.analyzer import ProfileAnalyzer
+
+        analyzer = ProfileAnalyzer(MagicMock(), self.db, settings(), MagicMock(), MagicMock())
+        user = type("UserObj", (), {"id": 10, "username": "ann", "first_name": "Анна", "last_name": None, "usernames": None})()
+        full = type(
+            "Full",
+            (),
+            {
+                "about": "Привет",
+                "personal_channel_id": None,
+                "stargifts_count": 20,
+                "stars_rating": None,
+                "send_paid_messages_stars": 0,
+            },
+        )()
+        analyzer._fetch_full_user = AsyncMock(return_value=(user, full))
+        analyzer._count_unique_gifts = AsyncMock(return_value=13)
+        profile = await analyzer.get_profile(10, user=user)
+        analyzer._count_unique_gifts.assert_awaited()
+        self.assertEqual(profile.nft_count, 13)
 
 
 class StatusHelpersTests(unittest.TestCase):

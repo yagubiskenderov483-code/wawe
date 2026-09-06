@@ -392,6 +392,8 @@ async def cmd_status(message: Message) -> None:
         f"Queue: {ctx.state.queue.qsize()}\n"
         f"Last scan: {stats.last_scan or '-'}\n"
         f"Last publish: {stats.last_publish or '-'}\n"
+        f"Scan time: {stats.average_scan_time if stats.average_scan_time is not None else '-'}s\n"
+        f"Catalog: hot={ctx.state.catalog_primary} watch={ctx.state.catalog_secondary} skip={ctx.state.catalog_skipped}\n"
         f"Scanned: {stats.get('total_scanned')}\n"
         f"Existing: {stats.get('existing')}\n"
         f"New: {stats.get('new_listings')}\n"

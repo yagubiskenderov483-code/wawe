@@ -109,6 +109,18 @@ class DatabaseTests(unittest.TestCase):
         self.db.add_notify_chat(555001)
         self.assertEqual(self.db.get_notify_chats(), (555001,))
 
+    def test_gift_listing_and_market_helpers(self):
+        self.assertFalse(self.db.gift_has_listings(10))
+        self.assertFalse(self.db.gift_was_scanned(10))
+        listing = passing_listing(listing_key="gift:cat", gift_id=10)
+        self.db.insert_listing(listing)
+        self.assertTrue(self.db.gift_has_listings(10))
+        self.db.set_scanner_offset(10, "")
+        self.assertTrue(self.db.gift_was_scanned(10))
+        self.assertIsNone(self.db.get_gift_market_value(10))
+        self.db.set_market_cache("g10", 10, None, None, None, 14000, 9000, 8, "medium")
+        self.assertEqual(self.db.get_gift_market_value(10), 14000)
+
     def test_error_listing_can_retry(self):
         from unittest.mock import MagicMock
 

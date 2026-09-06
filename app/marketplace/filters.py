@@ -33,16 +33,48 @@ def check_collectible(listing: Listing) -> FilterResult:
     return _fail("not_collectible_resale")
 
 
+RANK_PRIMARY = "primary"
+RANK_SECONDARY = "secondary"
+RANK_SKIP = "skip"
+
+
+def classify_collection(
+    min_stars: int | None,
+    settings: Settings,
+    cached_market: int | None = None,
+) -> str:
+    """Decide how often a gift type should be scanned.
+
+    Telegram's catalog includes hundreds of cheap collections whose floor can
+    never produce a 5-25k lot that also passes MAX_MARKET_RATIO. Those are
+    watched on a rotation. Collections already priced in-band are scanned every
+    cycle. Floors above max_price are skipped.
+    """
+    if min_stars is not None and min_stars > settings.max_price:
+        return RANK_SKIP
+    interesting = [value for value in (cached_market, min_stars) if value is not None and value > 0]
+    if not interesting:
+        return RANK_SECONDARY
+    best = max(interesting)
+    if best > settings.max_price:
+        return RANK_SKIP
+    if best >= settings.min_price:
+        return RANK_PRIMARY
+    if best * settings.max_market_ratio >= settings.min_price:
+        return RANK_PRIMARY
+    return RANK_SECONDARY
+
+
 def check_price(listing: Listing, settings: Settings) -> FilterResult:
     price = listing.price
     if price is None:
         log("FILTER", "Price unknown -> SKIP")
         return _fail("price_unknown")
     if price < settings.min_price:
-        log("FILTER", f"Price SKIP: {price}")
+        debug("FILTER", f"Price SKIP: {price}")
         return _fail("price_below_min")
     if price > settings.max_price:
-        log("FILTER", f"Price SKIP: {price}")
+        debug("FILTER", f"Price SKIP: {price}")
         return _fail("price_above_max")
     log("FILTER", f"Price PASS: {price}")
     return _ok("price_ok")

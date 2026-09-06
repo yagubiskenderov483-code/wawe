@@ -76,6 +76,35 @@ class MarketEstimator:
         self.client = client
         self.limiter = limiter
         self.stats = stats
+        self._observed: dict[int, list[int]] = {}
+
+    def observe_page(self, gift_id: int | None, gifts: Iterable[Any]) -> None:
+        if gift_id is None:
+            return
+        needed = max(1, int(self.settings.market_sample_size))
+        bucket = self._observed.setdefault(int(gift_id), [])
+        for gift in gifts:
+            if len(bucket) >= needed:
+                break
+            parsed = parse_listing(gift)
+            if parsed is None or parsed.price is None:
+                continue
+            bucket.append(int(parsed.price))
+        if len(bucket) >= min(5, needed):
+            sample = bucket[:needed]
+            value = median_int(sample)
+            floor = min(sample) if sample else None
+            self.db.set_market_cache(
+                market_cache_key(int(gift_id), None, None, None),
+                int(gift_id),
+                None,
+                None,
+                None,
+                value,
+                floor,
+                len(sample),
+                market_confidence(len(sample)),
+            )
 
     async def estimate(self, listing: Listing, force_refresh: bool = False) -> MarketEstimate:
         if listing.gift_id is None:
@@ -99,6 +128,22 @@ class MarketEstimator:
                 )
                 apply_market_estimate(listing, estimate)
                 return estimate
+
+        observed = self._estimate_from_observed(listing)
+        if observed is not None and observed.sample_size >= min(5, max(1, int(self.settings.market_sample_size))):
+            apply_market_estimate(listing, observed)
+            self.db.set_market_cache(
+                cache_key,
+                listing.gift_id,
+                listing.model,
+                listing.symbol,
+                listing.backdrop,
+                observed.market_value,
+                observed.floor_price,
+                observed.sample_size,
+                observed.confidence,
+            )
+            return observed
 
         estimate = await self._scan_comparables(listing)
         self.db.set_market_cache(
@@ -175,6 +220,24 @@ class MarketEstimator:
             prices=tuple(sample),
         )
 
+    def _estimate_from_observed(self, listing: Listing) -> MarketEstimate | None:
+        if listing.gift_id is None:
+            return None
+        sample = list(self._observed.get(int(listing.gift_id), []))
+        if not sample:
+            return None
+        needed = max(1, int(self.settings.market_sample_size))
+        sample = sample[:needed]
+        value = median_int(sample)
+        floor = min(sample) if sample else None
+        return MarketEstimate(
+            market_value=value,
+            floor_price=floor,
+            sample_size=len(sample),
+            confidence=market_confidence(len(sample)),
+            prices=tuple(sample),
+        )
+
     def _is_close_comparable(self, listing: Listing, other: Listing) -> bool:
         if listing.gift_id is not None and other.gift_id is not None and listing.gift_id != other.gift_id:
             return False
@@ -198,6 +261,7 @@ class MarketEstimator:
                             offset=offset,
                             limit=self.settings.resale_page_limit,
                             stars_only=True,
+                            sort_by_price=True,
                         )
                     )
             return await self.client(
@@ -206,6 +270,7 @@ class MarketEstimator:
                     offset=offset,
                     limit=self.settings.resale_page_limit,
                     stars_only=True,
+                    sort_by_price=True,
                 )
             )
 

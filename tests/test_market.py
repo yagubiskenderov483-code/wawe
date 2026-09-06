@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.marketplace.filters import check_market_value, check_manual_profile_tags, should_publish
-from app.marketplace.market import apply_market_estimate, market_confidence, median_int
+from app.marketplace.market import MarketEstimator, apply_market_estimate, market_confidence, median_int
 from app.marketplace.models import MarketEstimate
 from tests.helpers import passing_listing, passing_profile, settings
 
@@ -64,6 +64,29 @@ class MarketFilterTests(unittest.TestCase):
         result = should_publish(listing, profile, cfg)
         self.assertFalse(result.passed)
         self.assertEqual(result.reason, "market_ratio_too_high")
+
+
+class ObservedMarketTests(unittest.TestCase):
+    def test_observe_page_builds_estimate_without_api(self):
+        from tests.test_pipeline import StarGiftUnique
+        from app.storage.database import Database
+        import tempfile
+        from pathlib import Path
+
+        tmp = tempfile.TemporaryDirectory()
+        db = Database(str(Path(tmp.name) / "tracker.db"))
+        try:
+            market = MarketEstimator(settings(), db, client=None, limiter=None)
+            gifts = [StarGiftUnique(i, gift_id=10, price=8000 + i * 100) for i in range(8)]
+            market.observe_page(10, gifts)
+            listing = passing_listing(gift_id=10, price=8500, market_value=None)
+            estimate = market._estimate_from_observed(listing)
+            self.assertIsNotNone(estimate)
+            self.assertGreaterEqual(estimate.sample_size, 5)
+            self.assertEqual(estimate.market_value, median_int([8000 + i * 100 for i in range(8)]))
+        finally:
+            db.close()
+            tmp.cleanup()
 
 
 class GenderFilterTests(unittest.TestCase):

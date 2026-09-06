@@ -426,6 +426,83 @@ class DrainModeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(scanner._fetch_resale_page.await_count, 1)
 
 
+class FakeLimiter:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+
+class StarGift:
+    """Matches the duck-typing check in _load_gift_ids (class name matters)."""
+
+    def __init__(self, gift_id: int, floor, resale=10):
+        self.id = gift_id
+        self.availability_resale = resale
+        self.resell_min_stars = floor
+
+
+class FakeGiftCatalog:
+    def __init__(self, gifts):
+        self.gifts = gifts
+        self.hash = 0
+
+
+class CollectionFloorTests(unittest.IsolatedAsyncioTestCase):
+    """COLLECTION_FLOOR_FILTER: cheap collections are never paginated."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Database(str(Path(self.tmp.name) / "tracker.db"))
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp.cleanup()
+
+    def _catalog_scanner(self, gifts, **cfg_overrides):
+        scanner = _scanner(self.db, publish_existing=True)
+        scanner.settings = settings(
+            manual_gender_filter="",
+            publish_existing=True,
+            **cfg_overrides,
+        )
+        scanner.limiter = FakeLimiter()
+        scanner.client = AsyncMock(return_value=FakeGiftCatalog(gifts))
+        return scanner
+
+    async def test_only_collections_with_floor_in_band(self):
+        scanner = self._catalog_scanner(
+            [
+                StarGift(1, 626),
+                StarGift(2, 7000),
+                StarGift(3, 45000),
+                StarGift(4, None),
+                StarGift(5, 12000),
+            ],
+            collection_floor_filter=True,
+            collection_floor_min=5000,
+            collection_floor_max=30000,
+        )
+        self.assertEqual(await scanner._load_gift_ids(), [2, 5])
+
+    async def test_filter_disabled_keeps_every_resale_collection(self):
+        scanner = self._catalog_scanner(
+            [StarGift(1, 626), StarGift(2, 7000)],
+            collection_floor_filter=False,
+        )
+        self.assertEqual(await scanner._load_gift_ids(), [1, 2])
+
+    async def test_empty_band_scans_nothing(self):
+        scanner = self._catalog_scanner(
+            [StarGift(1, 626), StarGift(2, 900)],
+            collection_floor_filter=True,
+            collection_floor_min=5000,
+            collection_floor_max=30000,
+        )
+        self.assertEqual(await scanner._load_gift_ids(), [])
+
+
 class StatusHelpersTests(unittest.TestCase):
     def test_new_status_constant(self):
         self.assertEqual(STATUS_NEW, "NEW")

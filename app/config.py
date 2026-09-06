@@ -149,6 +149,9 @@ class Settings:
     unique_owners: bool = True
     max_new_per_gift_scan: int = 0
     publish_existing: bool = True
+    collection_floor_filter: bool = True
+    collection_floor_min: int = 5000
+    collection_floor_max: int = 25000
 
     @property
     def bot_user_id(self) -> int | None:
@@ -243,6 +246,9 @@ def load_settings() -> Settings:
     bot_username = _env("BOT_USERNAME", DEFAULT_BOT_USERNAME).lstrip("@") or DEFAULT_BOT_USERNAME
     target_channels = _csv_channel_ids("TARGET_CHANNELS")
 
+    min_price = _env_int("MIN_PRICE", 5000)
+    max_price = _env_int("MAX_PRICE", 25000)
+
     settings = Settings(
         api_id=int(api_id_raw),
         api_hash=api_hash,
@@ -250,8 +256,8 @@ def load_settings() -> Settings:
         target_channel_id=target_channel_id,
         target_channels=target_channels,
         bot_username=bot_username,
-        min_price=_env_int("MIN_PRICE", 5000),
-        max_price=_env_int("MAX_PRICE", 25000),
+        min_price=min_price,
+        max_price=max_price,
         scan_interval=float(_env("SCAN_INTERVAL", "2")),
         publish_delay=float(_env("PUBLISH_DELAY", "4")),
         max_nft_count=_env_int("MAX_NFT_COUNT", 12),
@@ -289,6 +295,9 @@ def load_settings() -> Settings:
         max_snapshot_pages_per_gift=_env_int("MAX_SNAPSHOT_PAGES_PER_GIFT", 1),
         max_new_per_gift_scan=_env_int("MAX_NEW_PER_GIFT_SCAN", 0),
         publish_existing=_env_bool("PUBLISH_EXISTING", True),
+        collection_floor_filter=_env_bool("COLLECTION_FLOOR_FILTER", True),
+        collection_floor_min=_env_int("COLLECTION_FLOOR_MIN", min_price),
+        collection_floor_max=_env_int("COLLECTION_FLOOR_MAX", max_price),
     )
     return settings
 

@@ -176,6 +176,12 @@ class MarketplaceScanner:
             self._gift_hash = getattr(result, "hash", 0) or 0
         ids: list[int] = []
         all_ids: list[int] = []
+        in_band: list[int] = []
+        floor_min = self.settings.collection_floor_min
+        floor_max = self.settings.collection_floor_max
+        skipped_cheap = 0
+        skipped_rich = 0
+        skipped_unknown = 0
         for gift in gifts:
             if not isinstance(gift, StarGift) and type(gift).__name__ != "StarGift":
                 continue
@@ -187,6 +193,33 @@ class MarketplaceScanner:
             min_stars = getattr(gift, "resell_min_stars", None)
             if resale or min_stars:
                 ids.append(int(gift_id))
+                # Collection-level price gate: a gift type whose cheapest resale
+                # lot sits outside the wanted band is never paginated, so cheap
+                # collections cannot eat the whole scan budget.
+                if min_stars is None:
+                    skipped_unknown += 1
+                elif int(min_stars) < floor_min:
+                    skipped_cheap += 1
+                elif int(min_stars) > floor_max:
+                    skipped_rich += 1
+                else:
+                    in_band.append(int(gift_id))
+
+        if self.settings.collection_floor_filter:
+            log(
+                "SCANNER",
+                f"Collections with resale floor in {floor_min}-{floor_max} stars: {len(in_band)} "
+                f"(skipped cheap={skipped_cheap}, expensive={skipped_rich}, unknown floor={skipped_unknown})",
+            )
+            if not in_band:
+                log(
+                    "SCANNER",
+                    f"Nothing to scan: no collection has a floor in {floor_min}-{floor_max} stars. "
+                    "Widen COLLECTION_FLOOR_MIN/MAX or set COLLECTION_FLOOR_FILTER=false.",
+                )
+            self._gift_ids = in_band
+            return list(self._gift_ids)
+
         chosen = ids or all_ids
         if chosen:
             self._gift_ids = chosen

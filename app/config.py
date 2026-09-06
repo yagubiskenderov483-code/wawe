@@ -14,10 +14,12 @@ BACKUP_DIR = DATA_DIR / "backups"
 
 load_dotenv(ROOT_DIR / ".env")
 
-# Credentials provided by the operator for this deployment.
-DEFAULT_API_ID = 36101343
-DEFAULT_API_HASH = "116195fa5e0459d25a9a6266b40807d7"
-DEFAULT_BOT_TOKEN = "8825465611:AAHlb8k99jLUKO30CSZDhsLQFVuCPzYsm74"
+# Secrets live in the environment (.env locally, panel variables in a deploy).
+# Nothing sensitive is hardcoded here: a token committed to a public repo gets
+# scanned within minutes and revoked by Telegram.
+DEFAULT_API_ID = 0
+DEFAULT_API_HASH = ""
+DEFAULT_BOT_TOKEN = ""
 DEFAULT_BOT_USERNAME = "jsjeigiejwhnewbot"
 DEFAULT_TARGET_CHANNEL_ID = -1003784435307
 

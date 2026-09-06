@@ -105,16 +105,16 @@ class Settings:
     target_channel_id: int | None
     target_channels: tuple[int, ...]
     bot_username: str = DEFAULT_BOT_USERNAME
-    min_price: int = 5000
+    min_price: int = 1000
     max_price: int = 30000
     scan_interval: float = 2.0
     publish_delay: float = 4.0
     max_nft_count: int = 12
     strict_nft_filter: bool = False
-    min_score: int = 6
-    min_profile_score: int = 5
+    min_score: int = 3
+    min_profile_score: int = 2
     russian_language_required: bool = True
-    require_free_messages: bool = True
+    require_free_messages: bool = False
     enable_account_level_filter: bool = False
     max_account_level: int = 2
     manual_gender_filter: str = "female"
@@ -247,16 +247,16 @@ def load_settings() -> Settings:
         target_channel_id=target_channel_id,
         target_channels=target_channels,
         bot_username=bot_username,
-        min_price=_env_int("MIN_PRICE", 5000),
+        min_price=_env_int("MIN_PRICE", 1000),
         max_price=_env_int("MAX_PRICE", 30000),
         scan_interval=float(_env("SCAN_INTERVAL", "2")),
         publish_delay=float(_env("PUBLISH_DELAY", "4")),
         max_nft_count=_env_int("MAX_NFT_COUNT", 12),
         strict_nft_filter=_env_bool("STRICT_NFT_FILTER", False),
-        min_score=_env_int("MIN_SCORE", 6),
-        min_profile_score=_env_int("MIN_PROFILE_SCORE", 5),
+        min_score=_env_int("MIN_SCORE", 3),
+        min_profile_score=_env_int("MIN_PROFILE_SCORE", 2),
         russian_language_required=_env_bool("RUSSIAN_LANGUAGE_REQUIRED", True),
-        require_free_messages=_env_bool("REQUIRE_FREE_MESSAGES", True),
+        require_free_messages=_env_bool("REQUIRE_FREE_MESSAGES", False),
         enable_account_level_filter=_env_bool("ENABLE_ACCOUNT_LEVEL_FILTER", False),
         max_account_level=_env_int("MAX_ACCOUNT_LEVEL", 2),
         manual_gender_filter=_env("MANUAL_GENDER_FILTER", "female") or "female",

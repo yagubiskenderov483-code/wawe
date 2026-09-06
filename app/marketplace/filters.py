@@ -4,7 +4,7 @@ from typing import Iterable, Optional
 
 from app.config import Settings
 from app.marketplace.models import FilterResult, Listing, Profile
-from app.profile.gender import infer_gender
+from app.profile.gender import infer_gender, looks_slavic_name
 from app.utils.logger import debug, log
 
 
@@ -149,12 +149,16 @@ def check_language(profile: Profile, settings: Settings) -> FilterResult:
     if not settings.russian_language_required:
         log("FILTER", f"Language: {language} -> PASS")
         return _ok("language_not_required")
-    if language == "ru":
-        log("FILTER", "Language: ru -> PASS")
-        return _ok("language_ru")
-    log("FILTER", f"Language: {language} -> SKIP")
+    if language in {"ru", "mixed"}:
+        log("FILTER", f"Language: {language} -> PASS")
+        return _ok("language_ru" if language == "ru" else "language_mixed")
+    if looks_slavic_name(profile.first_name, profile.last_name):
+        log("FILTER", f"Language: {language} slavic name -> PASS")
+        return _ok("language_slavic_name")
     if language == "unknown":
-        return _fail("language_unknown")
+        log("FILTER", "Language: unknown -> PASS")
+        return _ok("language_unknown_permissive")
+    log("FILTER", f"Language: {language} -> SKIP")
     return _fail("not_russian_language")
 
 
@@ -213,6 +217,7 @@ def check_manual_profile_tags(
         infer_gender(
             profile.first_name,
             prefs.get("manual_gender", profile.manual_gender),
+            last_name=profile.last_name,
         )
     )
     nationality = _norm(prefs.get("manual_nationality", profile.manual_nationality))

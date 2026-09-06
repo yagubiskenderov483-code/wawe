@@ -22,9 +22,11 @@ class FakeMessage:
 class RecordingBot:
     def __init__(self):
         self.chat_ids: list[int] = []
+        self.markups: list = []
 
     async def send_message(self, chat_id, text, **kwargs):
         self.chat_ids.append(int(chat_id))
+        self.markups.append(kwargs.get("reply_markup"))
         return FakeMessage()
 
 
@@ -103,6 +105,11 @@ class PublisherSendTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(published)
         self.assertEqual(self.bot.chat_ids, [-100123])
         self.assertNotIn(42, self.bot.chat_ids)
+        self.assertTrue(self.bot.markups)
+        markup = self.bot.markups[0]
+        self.assertIsNotNone(markup)
+        self.assertEqual(markup.inline_keyboard[0][0].text, "Открыть лот")
+        self.assertEqual(markup.inline_keyboard[0][1].text, "Написать")
         row = self.db.get_listing("gift:pub")
         self.assertEqual(row["status"], STATUS_SENT)
         self.assertEqual(row["target_channel"], "-100123")

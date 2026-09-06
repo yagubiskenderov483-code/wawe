@@ -111,7 +111,7 @@ cp .env.example .env
 
 1. Новый лот / изменение цены
 2. Collectible/resale
-3. Цена `5000–30000` ⭐
+3. Цена `1000–30000` ⭐
 4. Model / symbol / backdrop (если списки в `.env` не пустые)
 5. Диапазон номера NFT
 6. Blacklist, затем whitelist
@@ -137,7 +137,7 @@ Whitelist ограничивает **чьи** лоты можно публико
 - `scanner_state` — pagination offset
 - `stats` — зарезервировано
 
-После перезапуска уже отправленные `listing_key` повторно не публикуются. Изменение цены в диапазон `5000–30000` считается новым сигналом, одно и то же изменение дважды не отправляется.
+После перезапуска уже отправленные `listing_key` повторно не публикуются. Изменение цены в диапазон `1000–30000` считается новым сигналом, одно и то же изменение дважды не отправляется.
 
 ## 14. Очередь
 
@@ -154,6 +154,8 @@ Whitelist ограничивает **чьи** лоты можно публико
 ## 15. Почему задержка 4 секунды
 
 `PUBLISH_DELAY=4` — пауза **после успешной** публикации, в том числе между каналами. Несколько сообщений одновременно не отправляются.
+
+Под каждым лотом кнопки: **Открыть лот** (`https://t.me/nft/<slug>`) и **Написать** (профиль продавца).
 
 ## 16. Ручные метки
 
@@ -188,7 +190,7 @@ Whitelist ограничивает **чьи** лоты можно публико
 | Slug / ссылка | `slug` | поле не показывается |
 | Model / symbol / backdrop | `StarGiftAttribute*` | `None`, фильтр allowlist пропускает лот только если список пуст или значение есть |
 | NFT count | подсчёт `StarGiftUnique` через `payments.getSavedStarGifts` | при `STRICT_NFT_FILTER=false` не отклоняет |
-| Free messages | `user` / `userFull.send_paid_messages_stars` | `unknown`; при `REQUIRE_FREE_MESSAGES=true` → SKIP |
+| Free messages | `user` / `userFull.send_paid_messages_stars` | `unknown`; при `REQUIRE_FREE_MESSAGES=true` → SKIP, по умолчанию выключено |
 | Account level | `userFull.stars_rating.level` | лог `[PROFILE] Account level unavailable through Telegram API`; при выключенном фильтре не отклоняет |
 | Username, bio, канал | публичный User / UserFull | поля пустые, score ниже |
 | Картинка лота | document атрибута модели | отправляется только текст: бот не может прикрепить файл из user-session без отдельной загрузки |
@@ -219,7 +221,7 @@ python -m app.main
 - Scanner: `RUNNING` / `PAUSED` / `STOPPED`
 - Publisher: `RUNNING` / `WAITING` / `STOPPED`
 - User session: `AUTHORIZED` / `WAITING_LOGIN`
-- Queue, last scan/publish, scanned, new, filtered, sent, errors
+- Queue, last scan/publish, scanned, new, filtered, skip-причины, sent, errors
 
 `/pause` останавливает получение новых лотов. Publisher досылает очередь. `/resume` продолжает сканирование.
 

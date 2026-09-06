@@ -31,14 +31,14 @@ class PriceFilterTests(unittest.TestCase):
 
     def test_price_min(self):
         cfg = settings()
-        self.assertTrue(check_price(passing_listing(price=1000), cfg).passed)
-        self.assertFalse(check_price(passing_listing(price=999), cfg).passed)
-        self.assertEqual(check_price(passing_listing(price=999), cfg).reason, "price_below_min")
+        self.assertTrue(check_price(passing_listing(price=5000), cfg).passed)
+        self.assertFalse(check_price(passing_listing(price=4999), cfg).passed)
+        self.assertEqual(check_price(passing_listing(price=4999), cfg).reason, "price_below_min")
 
     def test_price_max(self):
         cfg = settings()
-        self.assertTrue(check_price(passing_listing(price=30000), cfg).passed)
-        failed = check_price(passing_listing(price=30001), cfg)
+        self.assertTrue(check_price(passing_listing(price=25000), cfg).passed)
+        failed = check_price(passing_listing(price=25001), cfg)
         self.assertFalse(failed.passed)
         self.assertEqual(failed.reason, "price_above_max")
 
@@ -124,12 +124,11 @@ class LanguageAndProfileTests(unittest.TestCase):
         cfg = settings(russian_language_required=True)
         self.assertTrue(check_language(passing_profile(language="ru"), cfg).passed)
         self.assertTrue(check_language(passing_profile(language="mixed"), cfg).passed)
-        self.assertTrue(check_language(passing_profile(language="unknown"), cfg).passed)
-        self.assertTrue(
-            check_language(passing_profile(language="en", first_name="Anna", last_name=None), cfg).passed
-        )
+        unknown = check_language(passing_profile(language="unknown"), cfg)
+        self.assertFalse(unknown.passed)
+        self.assertEqual(unknown.reason, "language_unknown")
         english = check_language(
-            passing_profile(language="en", first_name="John", last_name="Smith", bio="Hello"),
+            passing_profile(language="en", first_name="Anna", last_name=None, bio="Hello"),
             cfg,
         )
         self.assertFalse(english.passed)
@@ -145,7 +144,7 @@ class LanguageAndProfileTests(unittest.TestCase):
         enabled = settings(enable_account_level_filter=True, max_account_level=2)
         self.assertTrue(check_account_level(passing_profile(account_level=2), enabled).passed)
         self.assertFalse(check_account_level(passing_profile(account_level=3), enabled).passed)
-        self.assertFalse(check_account_level(passing_profile(account_level=None), enabled).passed)
+        self.assertTrue(check_account_level(passing_profile(account_level=None), enabled).passed)
         disabled = settings(enable_account_level_filter=False)
         self.assertTrue(check_account_level(passing_profile(account_level=99), disabled).passed)
 
@@ -230,22 +229,36 @@ class LanguageAndProfileTests(unittest.TestCase):
         self.assertTrue(result.reason)
 
     def test_typical_new_lot_is_not_overfiltered(self):
-        listing = passing_listing(price=1500, market_value=2000)
+        listing = passing_listing(price=12000, market_value=15000)
         profile = passing_profile(
             first_name="Анна",
             last_name=None,
             username="anna_gift",
-            bio=None,
+            bio="Коллекционирую подарки",
             language="ru",
-            nft_count=None,
-            free_messages=None,
-            account_level=None,
-            public_channel=None,
-            public_gifts=None,
+            nft_count=4,
+            free_messages=True,
+            account_level=1,
+            public_channel=True,
+            public_gifts=True,
             manual_gender=None,
         )
         result = should_publish(listing, profile, settings())
         self.assertTrue(result.passed, result.reason)
+
+    def test_cheap_lot_skipped(self):
+        result = should_publish(passing_listing(price=800, market_value=900), passing_profile(), settings())
+        self.assertFalse(result.passed)
+        self.assertEqual(result.reason, "price_below_min")
+
+    def test_male_profile_skipped(self):
+        result = should_publish(
+            passing_listing(),
+            passing_profile(manual_gender=None, first_name="Дима", last_name="Иванов"),
+            settings(),
+        )
+        self.assertFalse(result.passed)
+        self.assertEqual(result.reason, "manual_gender_mismatch")
 
     def test_overpriced_vs_market_still_skipped(self):
         listing = passing_listing(price=7000, market_value=300)

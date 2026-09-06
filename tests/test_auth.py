@@ -47,6 +47,9 @@ class ImportCycleTests(unittest.TestCase):
         self.assertEqual(infer_gender("Анна"), "female")
         self.assertEqual(infer_gender("Катя 💕"), "female")
         self.assertEqual(infer_gender("🌸", last_name="Петрова"), "female")
+        self.assertEqual(infer_gender("Дима"), "male")
+        self.assertEqual(infer_gender("Ilya"), "male")
+        self.assertIsNone(infer_gender("Alex"))
 
 
 class NoTerminalLoginTests(unittest.TestCase):

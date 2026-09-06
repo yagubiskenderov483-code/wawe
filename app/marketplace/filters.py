@@ -4,7 +4,7 @@ from typing import Iterable, Optional
 
 from app.config import Settings
 from app.marketplace.models import FilterResult, Listing, Profile
-from app.profile.gender import infer_gender, looks_slavic_name
+from app.profile.gender import infer_gender
 from app.utils.logger import debug, log
 
 
@@ -149,16 +149,15 @@ def check_language(profile: Profile, settings: Settings) -> FilterResult:
     if not settings.russian_language_required:
         log("FILTER", f"Language: {language} -> PASS")
         return _ok("language_not_required")
-    if language in {"ru", "mixed"}:
-        log("FILTER", f"Language: {language} -> PASS")
-        return _ok("language_ru" if language == "ru" else "language_mixed")
-    if looks_slavic_name(profile.first_name, profile.last_name):
-        log("FILTER", f"Language: {language} slavic name -> PASS")
-        return _ok("language_slavic_name")
-    if language == "unknown":
-        log("FILTER", "Language: unknown -> PASS")
-        return _ok("language_unknown_permissive")
+    if language == "ru":
+        log("FILTER", "Language: ru -> PASS")
+        return _ok("language_ru")
+    if language == "mixed":
+        log("FILTER", "Language: mixed -> PASS")
+        return _ok("language_mixed")
     log("FILTER", f"Language: {language} -> SKIP")
+    if language == "unknown":
+        return _fail("language_unknown")
     return _fail("not_russian_language")
 
 
@@ -198,8 +197,8 @@ def check_account_level(profile: Profile, settings: Settings) -> FilterResult:
     level = profile.account_level
     if level is None:
         log("PROFILE", "Account level unavailable through Telegram API")
-        log("FILTER", "Account level: unknown -> SKIP")
-        return _fail("account_level_unavailable")
+        log("FILTER", "Account level: unknown -> PASS")
+        return _ok("account_level_unavailable_permissive")
     if level > settings.max_account_level:
         log("FILTER", f"Account level: {level} -> SKIP")
         return _fail("account_level_too_high")

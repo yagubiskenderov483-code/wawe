@@ -68,7 +68,7 @@ def interpret_free_messages(user: Any, full: Any) -> Optional[bool]:
         return None
     if amount > 0:
         return False
-    return None
+    return True
 
 
 def extract_account_level(full: Any) -> Optional[int]:

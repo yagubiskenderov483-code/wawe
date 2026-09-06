@@ -156,7 +156,11 @@ class ProfileAnalyzer:
         if profile.user_id is not None:
             profile.nft_count = await self._count_unique_gifts(profile.user_id, entity)
             prefs = self.db.get_manual_profile_preferences(profile.user_id)
-            profile.manual_gender = infer_gender(profile.first_name, prefs.get("manual_gender"))
+            profile.manual_gender = infer_gender(
+                profile.first_name,
+                prefs.get("manual_gender"),
+                last_name=profile.last_name,
+            )
             profile.manual_nationality = prefs.get("manual_nationality")
             profile.manual_tag = prefs.get("manual_tag")
             profile.updated_at = utc_now_iso()

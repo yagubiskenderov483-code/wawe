@@ -7,7 +7,7 @@ from app.config import resolve_publish_chat_ids
 from tests.helpers import passing_listing, passing_profile, settings
 from app.marketplace.models import QueueItem
 from app.marketplace.parser import build_listing_key, extract_stars_price, parse_listing
-from app.notifications.publisher import format_listing_message
+from app.notifications.publisher import format_listing_message, listing_keyboard, owner_profile_url
 from app.profile.analyzer import detect_profile_language, detect_text_language
 from app.utils.rate_limit import invoke_telegram, next_backoff
 from app.utils.state import AppState, BoundedPriorityQueue
@@ -95,6 +95,25 @@ class ChannelAndMessageTests(unittest.TestCase):
         self.assertNotIn("None", text)
         self.assertNotIn("null", text)
         self.assertNotIn("unknown", text.lower())
+        self.assertNotIn("https://t.me/nft/", text)
+
+    def test_listing_buttons_open_nft_and_profile(self):
+        listing = passing_listing(slug="desk-calendar-1", owner_id=111, owner_username="ivan")
+        profile = passing_profile(username="ivan", user_id=111)
+        keyboard = listing_keyboard(listing, profile)
+        self.assertIsNotNone(keyboard)
+        row = keyboard.inline_keyboard[0]
+        self.assertEqual(row[0].text, "Открыть лот")
+        self.assertEqual(row[0].url, "https://t.me/nft/desk-calendar-1")
+        self.assertEqual(row[1].text, "Написать")
+        self.assertEqual(row[1].url, "https://t.me/ivan")
+
+    def test_write_button_uses_user_id_without_username(self):
+        listing = passing_listing(slug="gift-9", owner_id=777, owner_username=None)
+        profile = passing_profile(username=None, user_id=777)
+        self.assertEqual(owner_profile_url(profile, listing), "tg://user?id=777")
+        keyboard = listing_keyboard(listing, profile)
+        self.assertEqual(keyboard.inline_keyboard[0][1].url, "tg://user?id=777")
 
 
 class ParserTests(unittest.TestCase):

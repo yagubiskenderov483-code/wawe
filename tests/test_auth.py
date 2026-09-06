@@ -45,6 +45,8 @@ class ImportCycleTests(unittest.TestCase):
         self.assertTrue(callable(MarketplaceScanner))
         self.assertTrue(callable(check_manual_profile_tags))
         self.assertEqual(infer_gender("Анна"), "female")
+        self.assertEqual(infer_gender("Катя 💕"), "female")
+        self.assertEqual(infer_gender("🌸", last_name="Петрова"), "female")
 
 
 class NoTerminalLoginTests(unittest.TestCase):

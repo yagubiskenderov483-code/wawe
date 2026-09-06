@@ -4,6 +4,7 @@ import asyncio
 import time
 from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
 from telethon.tl.functions.payments import GetUniqueStarGiftRequest
@@ -55,6 +56,31 @@ def _price_change_block(listing: Listing) -> str | None:
     )
 
 
+def owner_profile_url(profile: Profile, listing: Listing) -> str | None:
+    username = _clean(profile.username) or _clean(listing.owner_username)
+    if username:
+        handle = username.lstrip("@")
+        if handle:
+            return f"https://t.me/{handle}"
+    user_id = profile.user_id if profile.user_id is not None else listing.owner_id
+    if user_id is not None:
+        return f"tg://user?id={int(user_id)}"
+    return None
+
+
+def listing_keyboard(listing: Listing, profile: Profile) -> InlineKeyboardMarkup | None:
+    row: list[InlineKeyboardButton] = []
+    nft_url = listing.nft_url
+    if nft_url:
+        row.append(InlineKeyboardButton(text="Открыть лот", url=nft_url))
+    profile_url = owner_profile_url(profile, listing)
+    if profile_url:
+        row.append(InlineKeyboardButton(text="Написать", url=profile_url))
+    if not row:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[row])
+
+
 def format_listing_message(listing: Listing, profile: Profile) -> str:
     lines = ["🎁 НОВЫЙ ЛОТ", ""]
     if _clean(listing.gift_name):
@@ -102,11 +128,6 @@ def format_listing_message(listing: Listing, profile: Profile) -> str:
     if change and "📉 Изменение:" not in "\n".join(lines):
         lines.append("")
         lines.append(change)
-    url = listing.nft_url
-    if url:
-        lines.append("")
-        lines.append("🔗 Открыть подарок:")
-        lines.append(url)
     detected = _clean(listing.first_seen_at)
     if detected:
         lines.append("")
@@ -240,6 +261,7 @@ class Publisher:
                 return False
 
             text = format_listing_message(listing, item.profile)
+            keyboard = listing_keyboard(listing, item.profile)
             success = 0
             last_message_id = None
             sent_to: list[int] = []
@@ -258,7 +280,7 @@ class Publisher:
                     ),
                 )
                 try:
-                    message = await self._send_listing(chat_id, text)
+                    message = await self._send_listing(chat_id, text, keyboard)
                     success += 1
                     sent_to.append(chat_id)
                     last_message_id = getattr(message, "message_id", None)
@@ -295,10 +317,15 @@ class Publisher:
             self.state.queue.task_done()
             self.db.remove_queue(listing.listing_key)
 
-    async def _send_listing(self, chat_id: int, text: str):
+    async def _send_listing(self, chat_id: int, text: str, reply_markup=None):
         while True:
             try:
-                return await self.bot.send_message(chat_id=chat_id, text=text, disable_web_page_preview=False)
+                return await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    disable_web_page_preview=True,
+                    reply_markup=reply_markup,
+                )
             except TelegramRetryAfter as error:
                 seconds = int(getattr(error, "retry_after", 0) or 0)
                 self.state.stats.inc("floodwaits")

@@ -73,7 +73,10 @@ class GenderFilterTests(unittest.TestCase):
 
     def test_missing_female_tag_skip(self):
         cfg = settings(manual_gender_filter="female")
-        failed = check_manual_profile_tags(passing_profile(manual_gender=None), settings=cfg)
+        failed = check_manual_profile_tags(
+            passing_profile(manual_gender=None, first_name="Alex", last_name=None),
+            settings=cfg,
+        )
         self.assertFalse(failed.passed)
         self.assertEqual(failed.reason, "manual_gender_missing")
 

@@ -396,6 +396,10 @@ async def cmd_status(message: Message) -> None:
         f"Existing: {stats.get('existing')}\n"
         f"New: {stats.get('new_listings')}\n"
         f"Filtered: {stats.get('filtered')}\n"
+        f"Skip: price={stats.get('skip_price')} gender={stats.get('skip_gender')} "
+        f"lang={stats.get('skip_language')} market={stats.get('skip_market')} "
+        f"free={stats.get('skip_free_messages')} owner={stats.get('skip_owner')} "
+        f"nft={stats.get('skip_nft')} score={stats.get('profile_filtered')}\n"
         f"Sent: {stats.get('sent')}\n"
         f"Errors: {stats.get('errors')}"
         f"{snapshot_hint}"
@@ -421,6 +425,10 @@ async def cmd_stats(message: Message) -> None:
         "free_message_filtered",
         "account_level_filtered",
         "manual_tag_filtered",
+        "skip_gender",
+        "skip_market",
+        "skip_owner",
+        "profile_filtered",
         "queued",
         "sent",
         "send_errors",

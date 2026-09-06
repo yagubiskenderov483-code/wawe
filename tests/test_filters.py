@@ -31,9 +31,9 @@ class PriceFilterTests(unittest.TestCase):
 
     def test_price_min(self):
         cfg = settings()
-        self.assertTrue(check_price(passing_listing(price=5000), cfg).passed)
-        self.assertFalse(check_price(passing_listing(price=4999), cfg).passed)
-        self.assertEqual(check_price(passing_listing(price=4999), cfg).reason, "price_below_min")
+        self.assertTrue(check_price(passing_listing(price=1000), cfg).passed)
+        self.assertFalse(check_price(passing_listing(price=999), cfg).passed)
+        self.assertEqual(check_price(passing_listing(price=999), cfg).reason, "price_below_min")
 
     def test_price_max(self):
         cfg = settings()
@@ -123,8 +123,17 @@ class LanguageAndProfileTests(unittest.TestCase):
     def test_language_filter(self):
         cfg = settings(russian_language_required=True)
         self.assertTrue(check_language(passing_profile(language="ru"), cfg).passed)
-        self.assertFalse(check_language(passing_profile(language="en"), cfg).passed)
-        self.assertFalse(check_language(passing_profile(language="unknown"), cfg).passed)
+        self.assertTrue(check_language(passing_profile(language="mixed"), cfg).passed)
+        self.assertTrue(check_language(passing_profile(language="unknown"), cfg).passed)
+        self.assertTrue(
+            check_language(passing_profile(language="en", first_name="Anna", last_name=None), cfg).passed
+        )
+        english = check_language(
+            passing_profile(language="en", first_name="John", last_name="Smith", bio="Hello"),
+            cfg,
+        )
+        self.assertFalse(english.passed)
+        self.assertEqual(english.reason, "not_russian_language")
 
     def test_free_messages_filter(self):
         cfg = settings(require_free_messages=True)
@@ -146,7 +155,10 @@ class LanguageAndProfileTests(unittest.TestCase):
         failed = check_manual_profile_tags(passing_profile(manual_gender="male"), settings=cfg)
         self.assertFalse(failed.passed)
         self.assertEqual(failed.reason, "manual_gender_mismatch")
-        missing = check_manual_profile_tags(passing_profile(manual_gender=None, first_name="Ivan"), settings=cfg)
+        missing = check_manual_profile_tags(
+            passing_profile(manual_gender=None, first_name="Alex", last_name=None),
+            settings=cfg,
+        )
         self.assertFalse(missing.passed)
         self.assertEqual(missing.reason, "manual_gender_missing")
         inferred = check_manual_profile_tags(
@@ -154,6 +166,16 @@ class LanguageAndProfileTests(unittest.TestCase):
             settings=cfg,
         )
         self.assertTrue(inferred.passed)
+        emoji = check_manual_profile_tags(
+            passing_profile(manual_gender=None, first_name="Катя 💕"),
+            settings=cfg,
+        )
+        self.assertTrue(emoji.passed)
+        last_name = check_manual_profile_tags(
+            passing_profile(manual_gender=None, first_name="🌸", last_name="Петрова"),
+            settings=cfg,
+        )
+        self.assertTrue(last_name.passed)
 
     def test_manual_nationality_filter(self):
         cfg = settings(manual_nationality_filter="ru")
@@ -206,6 +228,30 @@ class LanguageAndProfileTests(unittest.TestCase):
         result = should_publish(listing, profile, cfg)
         self.assertIsInstance(result.passed, bool)
         self.assertTrue(result.reason)
+
+    def test_typical_new_lot_is_not_overfiltered(self):
+        listing = passing_listing(price=1500, market_value=2000)
+        profile = passing_profile(
+            first_name="Анна",
+            last_name=None,
+            username="anna_gift",
+            bio=None,
+            language="ru",
+            nft_count=None,
+            free_messages=None,
+            account_level=None,
+            public_channel=None,
+            public_gifts=None,
+            manual_gender=None,
+        )
+        result = should_publish(listing, profile, settings())
+        self.assertTrue(result.passed, result.reason)
+
+    def test_overpriced_vs_market_still_skipped(self):
+        listing = passing_listing(price=7000, market_value=300)
+        result = should_publish(listing, passing_profile(), settings())
+        self.assertFalse(result.passed)
+        self.assertEqual(result.reason, "market_ratio_too_high")
 
 
 if __name__ == "__main__":

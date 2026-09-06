@@ -21,13 +21,13 @@ from tests.helpers import passing_listing, passing_profile, settings
 
 
 class StarGiftUnique:
-    def __init__(self, unique_id: int, gift_id: int = 10, price: int = 12000, num: int = 10):
+    def __init__(self, unique_id: int, gift_id: int = 10, price: int = 12000, num: int = 10, owner_id: int = 111):
         self.id = unique_id
         self.gift_id = gift_id
         self.title = "Desk Calendar"
         self.slug = f"desk-calendar-{unique_id}"
         self.num = num
-        self.owner_id = type("Peer", (), {"user_id": 111})()
+        self.owner_id = type("Peer", (), {"user_id": owner_id})()
         self.attributes = []
         self.resell_amount = [type("StarsAmount", (), {"amount": price, "nanos": 0})()]
 
@@ -137,7 +137,7 @@ class SnapshotAndRestartTests(unittest.IsolatedAsyncioTestCase):
         history = self.db.get_listing_price_history("gift:4")
         self.assertGreaterEqual(len(history), 1)
 
-    async def test_price_changed_unsent_is_rechecked(self):
+    async def test_price_changed_unsent_is_not_a_new_listing(self):
         scanner = _scanner(self.db)
         scanner._finish_snapshot()
         listing = passing_listing(listing_key="gift:44", price=12000, gift_id=10)
@@ -145,7 +145,48 @@ class SnapshotAndRestartTests(unittest.IsolatedAsyncioTestCase):
         existing = self.db.get_listing("gift:44")
         listing.price = 11000
         signal = scanner._classify_signal(listing, existing)
-        self.assertEqual(signal, "price_change")
+        self.assertIsNone(signal)
+        self.assertTrue(scanner.state.queue.empty())
+
+    async def test_same_owner_not_queued_twice(self):
+        scanner = _scanner(self.db)
+        scanner._finish_snapshot()
+        await scanner._process_gift(StarGiftUnique(20, price=12000))
+        await scanner._process_gift(StarGiftUnique(21, price=13000))
+        self.assertEqual(scanner.state.queue.qsize(), 1)
+        row = self.db.get_listing("gift:21")
+        self.assertEqual(row["skip_reason"], "owner_already_queued")
+
+    async def test_same_owner_not_published_again(self):
+        scanner = _scanner(self.db)
+        scanner._finish_snapshot()
+        listing = passing_listing(listing_key="gift:30", owner_id=111, seller_id=111, price=12000)
+        self.db.insert_listing(listing)
+        self.db.mark_sent("gift:30", 12000)
+        await scanner._process_gift(StarGiftUnique(31, price=14000))
+        row = self.db.get_listing("gift:31")
+        self.assertEqual(row["skip_reason"], "owner_already_published")
+        self.assertTrue(scanner.state.queue.empty())
+        self.assertEqual(scanner.state.stats.get("skip_owner"), 1)
+
+    async def test_different_owners_both_queued(self):
+        scanner = _scanner(self.db)
+        scanner._finish_snapshot()
+        await scanner._process_gift(StarGiftUnique(40, price=12000, owner_id=111))
+        await scanner._process_gift(StarGiftUnique(41, price=13000, owner_id=222))
+        self.assertEqual(scanner.state.queue.qsize(), 2)
+
+    async def test_unique_owners_can_be_disabled(self):
+        scanner = _scanner(self.db)
+        scanner.settings = settings(
+            target_channel_id=-100123,
+            unique_owners=False,
+            diversify_gifts=False,
+        )
+        scanner._finish_snapshot()
+        await scanner._process_gift(StarGiftUnique(50, price=12000, owner_id=111))
+        await scanner._process_gift(StarGiftUnique(51, price=13000, owner_id=111))
+        self.assertEqual(scanner.state.queue.qsize(), 2)
 
     async def test_pause_does_not_enqueue(self):
         state = AppState()
@@ -175,6 +216,19 @@ class DiversifyTests(unittest.IsolatedAsyncioTestCase):
 
     def test_pick_index_allows_repeat_when_no_alternative(self):
         self.assertEqual(pick_diversified_index([10, 10], 10, 1, 1, True), 0)
+
+    async def test_unique_owner_not_consecutive_when_alternative_exists(self):
+        state = AppState()
+        a = QueueItem(passing_listing(listing_key="o1", gift_id=1, owner_id=111, seller_id=111), passing_profile(), 50)
+        b = QueueItem(
+            passing_listing(listing_key="o2", gift_id=2, owner_id=222, seller_id=222),
+            passing_profile(user_id=222),
+            40,
+        )
+        await state.queue.put(a)
+        await state.queue.put(b)
+        first = await state.queue.get_diversified(None, 0, 1, False, last_owner_id=111, unique_owners=True)
+        self.assertEqual(first.listing.owner_id, 222)
 
 
 class StatusHelpersTests(unittest.TestCase):

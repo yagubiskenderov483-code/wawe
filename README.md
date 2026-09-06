@@ -65,6 +65,7 @@ TARGET_CHANNELS=-100111,-100222
 | `MARKET_CACHE_TTL` | кэш market value, секунды |
 | `STRICT_MARKET_FILTER` | нет comparable → SKIP |
 | `DIVERSIFY_GIFTS` / `MAX_SAME_GIFT_STREAK` | не слать один `gift_id` подряд |
+| `UNIQUE_OWNERS` | один владелец — один лот; повторные лоты того же seller — SKIP |
 | `WHITELIST_USERS` / `BLACKLIST_USERS` | blacklist важнее |
 | `FAVORITE_MODELS` | бонус к score, **не** обходит market filter |
 | `DB_BACKUP_INTERVAL` | backup SQLite, по умолчанию 3600 |
@@ -138,7 +139,9 @@ User-аккаунт должен уметь вызывать реальные м
 4. Пропишите `TARGET_CHANNEL_ID` в `.env`.
 5. Несколько целей: `TARGET_CHANNELS=`.
 
-Админский чат, личка бота и пользователь, который нажал `/start`, **никогда** не считаются target channel.
+Админский чат, личка бота и пользователь, который нажал `/start`, **никогда** не считаются target channel. Положительные chat id (люди/бот) отбрасываются.
+
+Если `TARGET_CHANNEL_ID` ещё не канал `-100...`, добавьте бота **админом** в канал с правом Post messages. Tracker запомнит этот канал сам и будет писать только туда.
 
 Публикация идёт только из `app/notifications/publisher.py`.
 
@@ -173,6 +176,9 @@ Market filter — **hard filter**. Score и favorite models его не обхо
 - `first_seen_at` значит только «tracker впервые увидел этот listing», это **не** время создания лота в Telegram.
 - После перезапуска старые ключи не публикуются повторно.
 - Статус `SENT` никогда не отправляется снова.
+- Смена цены у уже известного лота **не** делает его новым и не публикуется.
+- LIVE читает только свежую первую страницу resale, а не всю историю Marketplace.
+- Один владелец публикуется один раз (`UNIQUE_OWNERS=true`). Повторные лоты того же seller — SKIP.
 
 ## 11. Ручной gender
 
@@ -222,6 +228,8 @@ listing 2 -> send
 - изменение цены — новая запись в `listing_price_history`, это **не** новый listing
 
 Одинаковый `gift_id` не идёт подряд, если в очереди есть другой (`DIVERSIFY_GIFTS=true`, `MAX_SAME_GIFT_STREAK=1`). Повтор разрешён только если альтернативы нет или диверсификация выключена.
+
+Один `owner_id`/`seller_id` публикуется один раз (`UNIQUE_OWNERS=true`): если владелец уже в очереди или уже `SENT`, следующие лоты пропускаются.
 
 ## 15. FloodWait
 

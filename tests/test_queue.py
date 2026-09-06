@@ -77,6 +77,10 @@ class ChannelAndMessageTests(unittest.TestCase):
         self.assertEqual(targets, (-100123,))
         self.assertEqual(resolve_publish_chat_ids((bot_id,), (), bot_id), ())
 
+    def test_positive_ids_never_marketplace_targets(self):
+        targets = resolve_publish_chat_ids((8825465611, 555001), (555001,), bot_id=8825465611)
+        self.assertEqual(targets, ())
+
     def test_missing_fields_message(self):
         listing = passing_listing(gift_name=None, model=None, symbol=None, backdrop=None, slug=None, gift_number=None)
         profile = passing_profile(username=None, language="unknown", nft_count=None, account_level=None, free_messages=None)

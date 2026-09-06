@@ -11,13 +11,22 @@ def pick_diversified_index(
     streak: int,
     max_same_gift_streak: int,
     enabled: bool,
+    owner_ids: list[int | None] | None = None,
+    last_owner_id: int | None = None,
+    unique_owners: bool = False,
 ) -> int:
     if not gift_ids:
         return -1
-    if not enabled or last_gift_id is None or streak < max_same_gift_streak:
-        return 0
     for index, gift_id in enumerate(gift_ids):
-        if gift_id != last_gift_id:
+        owner = owner_ids[index] if owner_ids is not None and index < len(owner_ids) else None
+        gift_repeat = (
+            enabled
+            and last_gift_id is not None
+            and streak >= max_same_gift_streak
+            and gift_id == last_gift_id
+        )
+        owner_repeat = unique_owners and last_owner_id is not None and owner == last_owner_id
+        if not gift_repeat and not owner_repeat:
             return index
     return 0
 
@@ -75,12 +84,19 @@ class BoundedPriorityQueue:
         streak: int,
         max_same_gift_streak: int,
         enabled: bool,
+        last_owner_id: int | None = None,
+        unique_owners: bool = False,
     ) -> QueueItem:
-        if not enabled or last_gift_id is None or streak < max_same_gift_streak:
-            return await self.get()
-
         first = await self.get()
-        if first.listing.gift_id != last_gift_id:
+        owner = first.listing.seller_id or first.listing.owner_id
+        gift_repeat = (
+            enabled
+            and last_gift_id is not None
+            and streak >= max_same_gift_streak
+            and first.listing.gift_id == last_gift_id
+        )
+        owner_repeat = unique_owners and last_owner_id is not None and owner == last_owner_id
+        if not gift_repeat and not owner_repeat:
             return first
 
         rest: list[QueueItem] = []
@@ -89,7 +105,15 @@ class BoundedPriorityQueue:
             nxt = self.get_nowait()
             if nxt is None:
                 break
-            if chosen is None and nxt.listing.gift_id != last_gift_id:
+            nxt_owner = nxt.listing.seller_id or nxt.listing.owner_id
+            nxt_gift_repeat = (
+                enabled
+                and last_gift_id is not None
+                and streak >= max_same_gift_streak
+                and nxt.listing.gift_id == last_gift_id
+            )
+            nxt_owner_repeat = unique_owners and last_owner_id is not None and nxt_owner == last_owner_id
+            if chosen is None and not nxt_gift_repeat and not nxt_owner_repeat:
                 chosen = nxt
             else:
                 rest.append(nxt)
@@ -132,6 +156,7 @@ class AppState:
         self.scanner_mode = "INITIAL_SNAPSHOT"
         self.last_published_gift_id: int | None = None
         self.same_gift_streak = 0
+        self.last_published_owner_id: int | None = None
 
     def pause(self) -> list[QueueItem]:
         self.scanner_paused = True
@@ -160,13 +185,14 @@ class AppState:
             return "PAUSED"
         return "RUNNING"
 
-    def note_published_gift(self, gift_id: int | None) -> None:
+    def note_published_gift(self, gift_id: int | None, owner_id: int | None = None) -> None:
         if gift_id is None:
             self.last_published_gift_id = None
             self.same_gift_streak = 0
-            return
-        if gift_id == self.last_published_gift_id:
+        elif gift_id == self.last_published_gift_id:
             self.same_gift_streak += 1
         else:
             self.last_published_gift_id = gift_id
             self.same_gift_streak = 1
+        if owner_id is not None:
+            self.last_published_owner_id = owner_id

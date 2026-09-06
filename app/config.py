@@ -127,7 +127,7 @@ class Settings:
     session_path: str = str(SESSION_PATH)
     db_path: str = str(DB_PATH)
     backup_dir: str = str(BACKUP_DIR)
-    max_pages_per_gift: int = 8
+    max_pages_per_gift: int = 1
     max_snapshot_pages_per_gift: int = 40
     resale_page_limit: int = 50
     max_api_backoff: int = 32
@@ -137,6 +137,7 @@ class Settings:
     strict_market_filter: bool = True
     diversify_gifts: bool = True
     max_same_gift_streak: int = 1
+    unique_owners: bool = True
 
     @property
     def bot_user_id(self) -> int | None:
@@ -193,6 +194,8 @@ def resolve_publish_targets(
         if value is None:
             continue
         chat_id = int(value)
+        if chat_id >= 0:
+            continue
         if chat_id in blocked or chat_id in seen:
             continue
         seen.add(chat_id)
@@ -272,13 +275,10 @@ def load_settings() -> Settings:
         strict_market_filter=_env_bool("STRICT_MARKET_FILTER", True),
         diversify_gifts=_env_bool("DIVERSIFY_GIFTS", True),
         max_same_gift_streak=_env_int("MAX_SAME_GIFT_STREAK", 1),
+        unique_owners=_env_bool("UNIQUE_OWNERS", True),
+        max_pages_per_gift=_env_int("MAX_PAGES_PER_GIFT", 1),
         max_snapshot_pages_per_gift=_env_int("MAX_SNAPSHOT_PAGES_PER_GIFT", 40),
     )
-    if not settings.channel_ids:
-        raise RuntimeError(
-            "TARGET_CHANNEL_ID or TARGET_CHANNELS must be configured with a real "
-            "channel/supergroup id (usually -100...). Do not use the bot id or ADMIN_USER_ID."
-        )
     return settings
 
 

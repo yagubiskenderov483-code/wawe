@@ -8,7 +8,7 @@ from telethon import TelegramClient
 from telethon.errors import FloodWaitError
 from telethon.tl.functions.payments import GetUniqueStarGiftRequest
 
-from app.config import Settings
+from app.config import Settings, resolve_publish_targets
 from app.marketplace.filters import calculate_score, check_blacklist, classify_filter_stat, should_publish
 from app.marketplace.market import MarketEstimator
 from app.marketplace.models import STATUS_ERROR, STATUS_NEW, STATUS_SKIPPED, Listing, Profile, QueueItem, utc_now_iso
@@ -185,6 +185,8 @@ class Publisher:
                     self.state.same_gift_streak,
                     self.settings.max_same_gift_streak,
                     self.settings.diversify_gifts,
+                    last_owner_id=self.state.last_published_owner_id,
+                    unique_owners=self.settings.unique_owners,
                 ),
                 timeout=0.5,
             )
@@ -194,7 +196,11 @@ class Publisher:
             return None
 
     def _targets(self) -> tuple[int, ...]:
-        return self.settings.publish_targets()
+        return resolve_publish_targets(
+            (*self.settings.channel_ids, *self.db.get_publish_channels()),
+            bot_id=self.settings.bot_user_id,
+            admin_id=self.settings.admin_user_id,
+        )
 
     async def _warn_no_target(self) -> None:
         if self._no_target_warned:
@@ -206,7 +212,12 @@ class Publisher:
             "Do not use the bot id, ADMIN_USER_ID, or a private chat."
         )
         log("ERROR", message)
-        await self.alerts.notify("Publisher", message)
+        notify = getattr(self.alerts, "notify", None)
+        if notify is None:
+            return
+        result = notify("Publisher", message)
+        if asyncio.iscoroutine(result):
+            await result
 
     async def _publish_item(self, item: QueueItem) -> bool:
         listing = item.listing
@@ -232,6 +243,9 @@ class Publisher:
             last_message_id = None
             sent_to: list[int] = []
             for chat_id in targets:
+                if int(chat_id) >= 0:
+                    log("ERROR", f"Refusing to publish listing to private/bot chat {chat_id}")
+                    continue
                 log("PUBLISHER", f"Sending to TARGET_CHANNEL_ID {chat_id}")
                 debug(
                     "PUBLISHER",
@@ -270,7 +284,7 @@ class Publisher:
                 self.db.mark_price_change_notified(listing.listing_key, listing.old_price, listing.price)
             self.state.stats.inc("sent")
             self.state.stats.record_market(listing.price, listing.market_value, listing.discount_percent)
-            self.state.note_published_gift(listing.gift_id)
+            self.state.note_published_gift(listing.gift_id, listing.seller_id or listing.owner_id)
             return True
         finally:
             self.state.queue.task_done()
@@ -320,6 +334,11 @@ class Publisher:
         blocked = check_blacklist(profile, self.settings, listing)
         if not blocked.passed:
             return False, blocked.reason
+
+        if self.settings.unique_owners:
+            seller_id = listing.seller_id or listing.owner_id
+            if self.db.seller_was_published(seller_id):
+                return False, "owner_already_published"
 
         await self.market.estimate(listing, force_refresh=False)
         result = should_publish(listing, profile, self.settings)

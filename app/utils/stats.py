@@ -42,6 +42,7 @@ COUNTER_KEYS = (
     "skip_account_level",
     "skip_blacklist",
     "skip_duplicate",
+    "skip_owner",
     "market_rejected_count",
 )
 
@@ -66,6 +67,7 @@ _SKIP_KEYS = {
     "skip_account_level",
     "skip_blacklist",
     "skip_duplicate",
+    "skip_owner",
 }
 
 _ALIAS = {

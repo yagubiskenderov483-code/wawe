@@ -37,7 +37,6 @@ from app.marketplace.models import (
     STATUS_ERROR,
     STATUS_EXISTING,
     STATUS_NEW,
-    STATUS_PRICE_CHANGED,
     STATUS_QUEUED,
     STATUS_SENT,
     STATUS_SKIPPED,
@@ -236,7 +235,7 @@ class MarketplaceScanner:
             pages += 1
             if not next_offset:
                 break
-            if not snapshot and known_streak >= 12:
+            if not snapshot and known_streak >= 1:
                 debug("SCANNER", f"Stopping pagination for gift_id={gift_id}: reached known listings")
                 break
             offset = next_offset
@@ -286,16 +285,7 @@ class MarketplaceScanner:
             listing.first_seen_at = existing.get("first_seen_at") or listing.first_seen_at
             listing.last_notified_price = existing.get("last_notified_price")
             listing.is_initial_snapshot = bool(existing.get("is_initial_snapshot"))
-            if signal == "price_change":
-                recorded = self.db.record_price_change(listing.listing_key, listing.old_price, listing.price)
-                if not recorded:
-                    self.state.stats.inc("duplicates")
-                    return False
-                listing.is_price_change = True
-                listing.status = STATUS_PRICE_CHANGED
-                self.state.stats.inc("price_changes")
-                log("LIVE", f"PRICE_CHANGED {listing.listing_key}: {listing.old_price} -> {listing.price}")
-            elif existing.get("sent_at") or existing.get("status") == STATUS_SENT:
+            if signal != "retry":
                 return False
 
         return await self._filter_and_maybe_queue(listing)
@@ -330,6 +320,17 @@ class MarketplaceScanner:
         for result in cheap:
             if not result.passed:
                 self._skip(listing, result.reason)
+                return True
+
+        if self.settings.unique_owners:
+            seller_id = listing.seller_id or listing.owner_id
+            if self.db.seller_was_published(seller_id):
+                log("FILTER", f"Owner already published -> SKIP {seller_id}")
+                self._skip(listing, "owner_already_published")
+                return True
+            if self.db.seller_is_queued(seller_id, listing.listing_key):
+                log("FILTER", f"Owner already queued -> SKIP {seller_id}")
+                self._skip(listing, "owner_already_queued")
                 return True
 
         owner = self._users.get(listing.owner_id) if listing.owner_id is not None else None
@@ -402,34 +403,18 @@ class MarketplaceScanner:
     def _classify_signal(self, listing: Listing, existing: Optional[dict[str, Any]]) -> Optional[str]:
         if existing is None:
             return "new"
-        if existing.get("sent_at") or existing.get("status") == STATUS_SENT:
-            old_price = existing.get("price")
-            if listing.price is not None and old_price is not None and listing.price != old_price:
-                listing.old_price = old_price
-                self.db.record_price_change(listing.listing_key, old_price, listing.price)
-            return None
         old_price = existing.get("price")
-        status = existing.get("status")
         if listing.price is not None and old_price is not None and listing.price != old_price:
             listing.old_price = old_price
-            listing.is_price_change = True
-            if status == STATUS_QUEUED:
-                self.db.record_price_change(listing.listing_key, old_price, listing.price)
-                return None
-            return "price_change"
-        if status in {STATUS_QUEUED, STATUS_EXISTING, STATUS_SKIPPED}:
-            if status == STATUS_SKIPPED:
-                reason = existing.get("skip_reason") or ""
-                if reason.startswith("price_") and listing.price is not None:
-                    if self.settings.min_price <= listing.price <= self.settings.max_price:
-                        return "price_change"
+            self.db.record_price_change(listing.listing_key, old_price, listing.price)
+            self.state.stats.inc("price_changes")
+            log("LIVE", f"PRICE_CHANGED {listing.listing_key}: {old_price} -> {listing.price} (not a new listing)")
+        if existing.get("sent_at") or existing.get("status") == STATUS_SENT:
             return None
-        if status == STATUS_ERROR and not existing.get("is_initial_snapshot"):
+        if existing.get("is_initial_snapshot") or existing.get("status") == STATUS_EXISTING:
+            return None
+        if existing.get("status") == STATUS_ERROR and not existing.get("is_initial_snapshot"):
             return "retry"
-        if existing.get("last_notified_price") is not None and existing.get("last_notified_price") == listing.price:
-            return None
-        if status == STATUS_NEW:
-            return None
         return None
 
     def _skip(self, listing: Listing, reason: str) -> None:

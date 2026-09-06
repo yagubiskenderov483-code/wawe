@@ -10,10 +10,10 @@ from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message
+from aiogram.types import ChatMemberUpdated, Message
 from telethon import TelegramClient
 
-from app.config import Settings
+from app.config import Settings, resolve_publish_targets
 from app.marketplace.models import utc_now_iso
 from app.profile.analyzer import ProfileAnalyzer
 from app.storage.database import Database
@@ -75,8 +75,13 @@ def setup_bot(
     return bot, dp
 
 
-async def verify_target_channels(bot: Bot, settings: Settings) -> tuple[int, ...]:
-    targets = settings.publish_targets()
+async def verify_target_channels(bot: Bot, settings: Settings, db: Database | None = None) -> tuple[int, ...]:
+    extra = db.get_publish_channels() if db is not None else ()
+    targets = resolve_publish_targets(
+        (*settings.channel_ids, *extra),
+        bot_id=settings.bot_user_id,
+        admin_id=settings.admin_user_id,
+    )
     if not targets:
         message = (
             "[ERROR] TARGET_CHANNEL_ID is missing or points to the bot/admin chat. "
@@ -267,11 +272,40 @@ async def login_password_received(message: Message, state: FSMContext) -> None:
     await message.answer("Вход выполнен. Scanner запущен.")
 
 
+def _listing_targets() -> tuple[int, ...]:
+    extra = ctx.db.get_publish_channels() if ctx.db is not None else ()
+    return resolve_publish_targets(
+        (*ctx.settings.channel_ids, *extra),
+        bot_id=ctx.settings.bot_user_id,
+        admin_id=ctx.settings.admin_user_id,
+    )
+
+
+@router.my_chat_member()
+async def bot_added_to_chat(event: ChatMemberUpdated) -> None:
+    chat = event.chat
+    chat_type = getattr(chat, "type", None)
+    new_status = getattr(event.new_chat_member, "status", None)
+    if chat_type not in {ChatType.CHANNEL, ChatType.SUPERGROUP, "channel", "supergroup"}:
+        log("BOT", f"Ignoring non-channel membership chat={getattr(chat, 'id', None)} type={chat_type}")
+        return
+    chat_id = int(chat.id)
+    if chat_id >= 0:
+        return
+    if new_status in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR, "administrator", "creator"}:
+        ctx.db.add_publish_channel(chat_id, getattr(chat, "title", None))
+        log("PUBLISHER", f"Bot is admin in channel {chat_id}; listings will go there")
+        return
+    if new_status in {ChatMemberStatus.KICKED, ChatMemberStatus.LEFT, "kicked", "left"}:
+        ctx.db.remove_publish_channel(chat_id)
+        log("PUBLISHER", f"Bot removed from channel {chat_id}")
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
     username = ctx.settings.bot_username.lstrip("@")
     authorized = ctx.state.user_authorized
-    targets = ctx.settings.publish_targets()
+    targets = _listing_targets()
     login_hint = (
         "User-сессия уже активна."
         if authorized
@@ -286,10 +320,11 @@ async def cmd_start(message: Message) -> None:
     await message.answer(
         "Marketplace Tracker запущен.\n"
         f"Бот: @{username}\n"
-        "Этот чат — только команды и ошибки.\n"
-        "Лоты Marketplace публикуются только в TARGET_CHANNEL_ID, не сюда.\n"
-        f"Target channels: {', '.join(str(item) for item in targets) or 'не заданы'}\n"
+        "Этот чат — только команды и ошибки. Лоты сюда НЕ приходят.\n"
+        "Добавьте бота администратором в канал с правом публикации — лоты пойдут туда.\n"
+        f"Target channels: {', '.join(str(item) for item in targets) or 'канал ещё не задан'}\n"
         f"Scanner mode: {ctx.state.scanner_mode}\n"
+        "Публикуются только новые лоты после snapshot. Один владелец — один раз.\n"
         "Пауза между лотами: 4 секунды.\n\n"
         f"{login_hint}"
     )
@@ -316,7 +351,7 @@ async def cmd_resume(message: Message) -> None:
 @router.message(Command("status"))
 async def cmd_status(message: Message) -> None:
     stats = ctx.state.stats
-    targets = ctx.settings.publish_targets()
+    targets = _listing_targets()
     text = (
         f"Scanner: {ctx.state.scanner_status()}\n"
         f"Publisher: {ctx.state.publisher_status()}\n"
@@ -358,6 +393,7 @@ async def cmd_stats(message: Message) -> None:
         "skip_account_level",
         "skip_blacklist",
         "skip_duplicate",
+        "skip_owner",
         "average_market_value",
         "average_listing_price",
         "average_discount",

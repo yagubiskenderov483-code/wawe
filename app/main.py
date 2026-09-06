@@ -95,7 +95,7 @@ async def run_tracker() -> None:
         bot, dp = setup_bot(settings, state, db, analyzer, client=client, on_authorized=start_workers)
         alerts.bind_bot(bot)
         try:
-            usable = await verify_target_channels(bot, settings)
+            usable = await verify_target_channels(bot, settings, db)
             if not usable:
                 await alerts.notify(
                     "ChannelCheck",

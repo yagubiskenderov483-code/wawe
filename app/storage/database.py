@@ -146,6 +146,12 @@ CREATE TABLE IF NOT EXISTS notify_chats (
     added_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS publish_channels (
+    chat_id INTEGER PRIMARY KEY,
+    title TEXT,
+    added_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_listings_listing_key ON listings(listing_key);
 CREATE INDEX IF NOT EXISTS idx_listings_gift_id ON listings(gift_id);
 CREATE INDEX IF NOT EXISTS idx_listings_slug ON listings(slug);
@@ -790,6 +796,60 @@ class Database:
     def get_notify_chats(self) -> tuple[int, ...]:
         rows = self.conn.execute("SELECT chat_id FROM notify_chats ORDER BY added_at ASC").fetchall()
         return tuple(int(row["chat_id"]) for row in rows)
+
+    def add_publish_channel(self, chat_id: int, title: str | None = None) -> None:
+        if int(chat_id) >= 0:
+            return
+        self.conn.execute(
+            """
+            INSERT INTO publish_channels (chat_id, title, added_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                title=COALESCE(excluded.title, publish_channels.title)
+            """,
+            (int(chat_id), title, utc_now_iso()),
+        )
+        self.conn.commit()
+        log("PUBLISHER", f"Target channel registered: {chat_id}")
+
+    def remove_publish_channel(self, chat_id: int) -> None:
+        self.conn.execute("DELETE FROM publish_channels WHERE chat_id = ?", (int(chat_id),))
+        self.conn.commit()
+
+    def get_publish_channels(self) -> tuple[int, ...]:
+        rows = self.conn.execute(
+            "SELECT chat_id FROM publish_channels WHERE chat_id < 0 ORDER BY added_at ASC"
+        ).fetchall()
+        return tuple(int(row["chat_id"]) for row in rows)
+
+    def seller_was_published(self, seller_id: int | None) -> bool:
+        if seller_id is None:
+            return False
+        row = self.conn.execute(
+            """
+            SELECT 1 FROM listings
+            WHERE (seller_id = ? OR owner_id = ?)
+              AND (status = 'SENT' OR sent_at IS NOT NULL)
+            LIMIT 1
+            """,
+            (int(seller_id), int(seller_id)),
+        ).fetchone()
+        return row is not None
+
+    def seller_is_queued(self, seller_id: int | None, except_key: str | None = None) -> bool:
+        if seller_id is None:
+            return False
+        sql = """
+            SELECT 1 FROM listings
+            WHERE (seller_id = ? OR owner_id = ?)
+              AND status = 'QUEUED'
+        """
+        params: list[Any] = [int(seller_id), int(seller_id)]
+        if except_key:
+            sql += " AND listing_key != ?"
+            params.append(except_key)
+        sql += " LIMIT 1"
+        return self.conn.execute(sql, params).fetchone() is not None
 
 
 def get_manual_profile_preferences(db: Database, user_id: int) -> dict[str, Optional[str]]:

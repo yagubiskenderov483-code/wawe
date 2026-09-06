@@ -421,5 +421,7 @@ def classify_filter_stat(reason: str) -> str | None:
         "market_ratio_too_high": "skip_market",
         "already_sent": "skip_duplicate",
         "duplicate": "skip_duplicate",
+        "owner_already_published": "skip_owner",
+        "owner_already_queued": "skip_owner",
     }
     return mapping.get(reason)

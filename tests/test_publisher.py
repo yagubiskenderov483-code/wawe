@@ -135,6 +135,31 @@ class PublisherSendTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(3.0, self.slept)
         self.assertEqual(self.bot.chat_ids, [-100123])
 
+    async def test_never_sends_to_bot_private_chat(self):
+        self.publisher.settings = settings(
+            target_channel_id=8825465611,
+            admin_user_id=42,
+            bot_token="8825465611:test",
+        )
+        listing = passing_listing(listing_key="gift:dm")
+        self.db.insert_listing(listing)
+        item = QueueItem(listing, passing_profile(), 1)
+        self.publisher._recheck = AsyncMock(return_value=(True, "ok"))
+        published = await self.publisher._publish_item(item)
+        self.assertFalse(published)
+        self.assertEqual(self.bot.chat_ids, [])
+
+    async def test_owner_already_sent_skipped_on_recheck(self):
+        first = passing_listing(listing_key="gift:own1", owner_id=111, seller_id=111)
+        self.db.insert_listing(first)
+        self.db.mark_sent("gift:own1", 12000)
+        second = passing_listing(listing_key="gift:own2", owner_id=111, seller_id=111)
+        self.db.insert_listing(second)
+        item = QueueItem(second, passing_profile(user_id=111), 1)
+        published = await self.publisher._publish_item(item)
+        self.assertFalse(published)
+        self.assertEqual(self.bot.chat_ids, [])
+
     async def test_already_sent_not_resent(self):
         listing = passing_listing(listing_key="gift:once")
         self.db.insert_listing(listing)

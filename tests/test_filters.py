@@ -155,11 +155,16 @@ class LanguageAndProfileTests(unittest.TestCase):
         self.assertFalse(failed.passed)
         self.assertEqual(failed.reason, "manual_gender_mismatch")
         missing = check_manual_profile_tags(
-            passing_profile(manual_gender=None, first_name="Alex", last_name=None),
+            passing_profile(manual_gender=None, first_name="Alex", last_name=None, language="en"),
             settings=cfg,
         )
         self.assertFalse(missing.passed)
         self.assertEqual(missing.reason, "manual_gender_missing")
+        unmarked_ru = check_manual_profile_tags(
+            passing_profile(manual_gender=None, first_name="Alex", last_name=None, language="ru"),
+            settings=cfg,
+        )
+        self.assertTrue(unmarked_ru.passed)
         inferred = check_manual_profile_tags(
             passing_profile(manual_gender=None, first_name="Анна"),
             settings=cfg,

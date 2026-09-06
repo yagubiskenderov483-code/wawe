@@ -247,10 +247,10 @@ class MarketplaceScanner:
         return found
 
     async def _process_live_page(self, gifts: list[Any]) -> bool:
-        """Publish every unseen listing before the first known one.
+        """Evaluate unseen listings before the first known snapshot row.
 
-        If the whole page is unseen (old stock we never snapshotted), only the
-        first max_new_per_gift_scan items are candidates; the rest are remembered.
+        A page with no known ids is treated as a full candidate page so a cheap
+        gift at the top cannot hide a 5-25k listing further down.
         """
         rows: list[tuple[Any, Listing, Optional[dict[str, Any]]]] = []
         first_known: int | None = None
@@ -259,23 +259,26 @@ class MarketplaceScanner:
             if listing is None:
                 continue
             existing = self.db.get_listing(listing.listing_key)
-            if existing is not None and first_known is None:
+            if self._is_known_barrier(existing) and first_known is None:
                 first_known = len(rows)
             rows.append((gift, listing, existing))
-        if first_known is None:
-            publish_until = min(len(rows), self.settings.max_new_per_gift_scan)
-        else:
-            publish_until = first_known
+        publish_until = first_known if first_known is not None else len(rows)
         hit_known = first_known is not None
         for index, (gift, listing, existing) in enumerate(rows):
-            if existing is not None:
+            if self._is_known_barrier(existing):
                 continue
             if index < publish_until:
                 await self._process_gift(gift)
             else:
-                reason = "behind_known" if hit_known else "live_overflow"
-                self._remember_existing(listing, reason=reason)
+                self._remember_existing(listing, reason="behind_known")
         return hit_known
+
+    def _is_known_barrier(self, existing: Optional[dict[str, Any]]) -> bool:
+        if existing is None:
+            return False
+        if existing.get("skip_reason") == "live_overflow":
+            return False
+        return True
 
     async def _fetch_resale_page(self, gift_id: int, offset: str) -> Any:
         from telethon.tl.functions.payments import GetResaleStarGiftsRequest
@@ -454,6 +457,8 @@ class MarketplaceScanner:
             log("LIVE", f"PRICE_CHANGED {listing.listing_key}: {old_price} -> {listing.price} (not a new listing)")
         if existing.get("sent_at") or existing.get("status") == STATUS_SENT:
             return None
+        if existing.get("status") == STATUS_EXISTING and existing.get("skip_reason") == "live_overflow":
+            return "retry"
         if existing.get("is_initial_snapshot") or existing.get("status") == STATUS_EXISTING:
             return None
         if existing.get("status") == STATUS_ERROR and not existing.get("is_initial_snapshot"):

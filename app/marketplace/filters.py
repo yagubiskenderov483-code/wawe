@@ -231,13 +231,17 @@ def check_manual_profile_tags(
 
     gender_filter = settings.normalized_gender_filter()
     if gender_filter:
-        if not gender:
-            log("FILTER", "Manual gender: unmarked -> SKIP")
-            return _fail("manual_gender_missing")
-        if gender != gender_filter:
+        if gender and gender != gender_filter:
             log("FILTER", f"Manual gender: {gender} -> SKIP")
             return _fail("manual_gender_mismatch")
-        log("FILTER", f"Manual gender: {gender} -> PASS")
+        if not gender:
+            language = profile.language or "unknown"
+            if language not in {"ru", "mixed"}:
+                log("FILTER", "Manual gender: unmarked -> SKIP")
+                return _fail("manual_gender_missing")
+            log("FILTER", "Manual gender: unmarked Russian profile -> PASS")
+        else:
+            log("FILTER", f"Manual gender: {gender} -> PASS")
 
     nationality_filter = settings.normalized_nationality_filter()
     if nationality_filter:

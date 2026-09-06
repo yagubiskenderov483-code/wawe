@@ -4,6 +4,8 @@ import asyncio
 import signal
 from pathlib import Path
 
+from aiogram.exceptions import TelegramUnauthorizedError
+
 from app.config import DATA_DIR, load_settings
 from app.marketplace.scanner import MarketplaceScanner
 from app.notifications.alerts import AlertManager
@@ -11,7 +13,7 @@ from app.notifications.publisher import Publisher
 from app.profile.analyzer import ProfileAnalyzer
 from app.storage.backup import create_backup
 from app.storage.database import Database
-from app.telegram.bot import setup_bot, verify_target_channels
+from app.telegram.bot import BOT_TOKEN_HELP, BotUnauthorizedError, setup_bot, verify_target_channels
 from app.telegram.user_client import build_user_client, connect_user_client
 from app.utils.logger import log, redact_secrets, setup_logging
 from app.utils.rate_limit import ApiLimiter, SessionInvalidError, sleep_seconds
@@ -86,6 +88,9 @@ async def run_tracker() -> None:
         alerts.bind_bot(bot)
         try:
             await verify_target_channels(bot, settings)
+        except BotUnauthorizedError as error:
+            log("ERROR", str(error))
+            raise SystemExit(1) from error
         except Exception as error:
             log("ERROR", str(error))
             await alerts.notify("ChannelCheck", error)
@@ -105,6 +110,12 @@ async def run_tracker() -> None:
         )
         log("MAIN", "Tracker is running. Press Ctrl+C to stop.")
         await stop_event.wait()
+    except BotUnauthorizedError as error:
+        log("ERROR", str(error))
+        raise SystemExit(1) from error
+    except TelegramUnauthorizedError as error:
+        log("ERROR", BOT_TOKEN_HELP)
+        raise SystemExit(1) from error
     except SessionInvalidError as error:
         log("ERROR", str(error))
         if bot is not None:

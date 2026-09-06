@@ -200,6 +200,15 @@ python -m app.main
 
 Остановка: `Ctrl+C`. Корректно закрываются scanner, publisher, bot, Telethon и SQLite.
 
+Если сразу после старта в логе `TelegramUnauthorizedError` / `BOT_TOKEN is invalid or revoked` — это **не** Telethon user-сессия. Telegram отверг токен бота (часто после утечки в git). `/login` в этом состоянии не работает.
+
+1. Откройте [@BotFather](https://t.me/BotFather) → `/token` или `/newbot`
+2. Пропишите новый токен в `.env` как `BOT_TOKEN=...`
+3. Перезапустите tracker
+4. Напишите боту `/login` и авторизуйте user-сессию
+
+Сообщение `User session is not authorized` само по себе не фатально: бот должен остаться онлайн и ждать `/login`.
+
 ## 19. Команда /status
 
 Напишите боту `/status`:

@@ -43,6 +43,8 @@ class NoTerminalLoginTests(unittest.TestCase):
         source = inspect.getsource(user_client)
         self.assertNotIn("input(", source)
         self.assertNotIn("client.start()", source)
+        self.assertNotIn("Send /login in the bot", source)
+        self.assertIn("/login", source)
 
 
 if __name__ == "__main__":

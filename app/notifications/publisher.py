@@ -5,7 +5,7 @@ from aiogram import Bot
 from telethon import TelegramClient
 from telethon.tl.functions.payments import GetUniqueStarGiftRequest
 
-from app.config import Settings, resolve_publish_chat_ids
+from app.config import Settings, bot_id_from_token, resolve_publish_chat_ids
 from app.marketplace.filters import calculate_score, classify_filter_stat, should_publish
 from app.marketplace.models import STATUS_ERROR, STATUS_NEW, STATUS_SKIPPED, Listing, Profile, QueueItem, utc_now_iso
 from app.marketplace.parser import listing_still_on_sale, parse_listing
@@ -163,11 +163,7 @@ class Publisher:
             pass
 
     def _bot_id(self) -> int | None:
-        token = self.settings.bot_token or ""
-        prefix = token.split(":", 1)[0]
-        if prefix.isdigit():
-            return int(prefix)
-        return None
+        return bot_id_from_token(self.settings.bot_token)
 
     def _targets(self) -> tuple[int, ...]:
         return resolve_publish_chat_ids(

@@ -142,6 +142,17 @@ class Settings:
         return self.manual_nationality_filter.strip().lower()
 
 
+def bot_id_from_token(token: str | None) -> int | None:
+    """Bot id is the numeric prefix of a Bot API token (`123456:AAH...`)."""
+    raw = (token or "").strip()
+    if not raw or ":" not in raw:
+        return None
+    prefix = raw.split(":", 1)[0]
+    if not prefix.isdigit():
+        return None
+    return int(prefix)
+
+
 def resolve_publish_chat_ids(
     configured: tuple[int, ...],
     operator_chats: tuple[int, ...],

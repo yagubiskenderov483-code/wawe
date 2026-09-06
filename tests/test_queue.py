@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from app.config import resolve_publish_chat_ids
+from app.config import bot_id_from_token, resolve_publish_chat_ids
 from tests.helpers import passing_listing, passing_profile, settings
 from app.marketplace.models import QueueItem
 from app.marketplace.parser import build_listing_key, extract_stars_price, parse_listing
@@ -76,6 +76,7 @@ class ChannelAndMessageTests(unittest.TestCase):
         targets = resolve_publish_chat_ids((bot_id,), (555001,), bot_id)
         self.assertEqual(targets, (555001,))
         self.assertEqual(resolve_publish_chat_ids((bot_id,), (), bot_id), ())
+        self.assertEqual(bot_id_from_token("8825465611:AAHexampletokenvalue"), 8825465611)
 
     def test_missing_fields_message(self):
         listing = passing_listing(gift_name=None, model=None, symbol=None, backdrop=None, slug=None, gift_number=None)

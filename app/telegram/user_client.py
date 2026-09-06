@@ -37,12 +37,12 @@ async def connect_user_client(client: TelegramClient) -> bool:
         UserDeactivatedError,
         UserDeactivatedBanError,
     ):
-        log("AUTH", "Saved session is unusable. Send /login in the bot")
+        log("AUTH", "Saved session is unusable. Login via /login after the bot starts")
         return False
     if authorized:
         me = await client.get_me()
         username = getattr(me, "username", None)
         log("AUTH", f"User client authorized as @{username}" if username else "User client authorized")
         return True
-    log("AUTH", "Session is not authorized. Send /login in the bot")
+    log("AUTH", "User session is not authorized. Login via /login after the bot starts")
     return False

@@ -13,7 +13,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
 from telethon import TelegramClient
 
-from app.config import Settings
+from app.config import Settings, bot_id_from_token
 from app.marketplace.models import utc_now_iso
 from app.profile.analyzer import ProfileAnalyzer
 from app.storage.database import Database
@@ -29,6 +29,16 @@ from app.utils.state import AppState
 router = Router()
 
 _TAG_RE = re.compile(r"(gender|nationality|tag)=([^\s]+)", re.IGNORECASE)
+
+BOT_TOKEN_HELP = (
+    "BOT_TOKEN is invalid or revoked (Telegram Unauthorized). "
+    "Create a new token with @BotFather, set BOT_TOKEN in .env, and restart. "
+    "/login cannot work until Telegram accepts the bot token."
+)
+
+
+class BotUnauthorizedError(RuntimeError):
+    """Raised when Telegram rejects the configured bot token."""
 
 
 class LoginStates(StatesGroup):
@@ -75,11 +85,22 @@ def setup_bot(
     return bot, dp
 
 
+async def resolve_bot_id(bot: Bot, settings: Settings) -> int:
+    parsed = bot_id_from_token(settings.bot_token)
+    try:
+        me = await bot.me()
+    except TelegramUnauthorizedError as error:
+        raise BotUnauthorizedError(BOT_TOKEN_HELP) from error
+    bot_id = int(me.id)
+    if parsed is not None and parsed != bot_id:
+        log("BOT", "BOT_TOKEN prefix does not match getMe id; using getMe")
+    return bot_id
+
+
 async def verify_target_channels(bot: Bot, settings: Settings) -> None:
     if not settings.channel_ids:
         raise RuntimeError("[ERROR] TARGET_CHANNEL_ID is not configured")
-    me = await bot.me()
-    bot_id = int(me.id)
+    bot_id = await resolve_bot_id(bot, settings)
     failures: list[str] = []
     usable = 0
     for chat_id in settings.channel_ids:
@@ -261,11 +282,7 @@ async def _register_operator_chat(message: Message) -> None:
     chat_id = getattr(message.chat, "id", None)
     if chat_id is None:
         return
-    bot_id = None
-    token = ctx.settings.bot_token or ""
-    prefix = token.split(":", 1)[0]
-    if prefix.isdigit():
-        bot_id = int(prefix)
+    bot_id = bot_id_from_token(ctx.settings.bot_token)
     if bot_id is not None and int(chat_id) == bot_id:
         return
     ctx.db.add_notify_chat(int(chat_id))
